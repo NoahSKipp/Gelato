@@ -3,7 +3,10 @@
 using System.ComponentModel.DataAnnotations;
 using System.Net;
 using System.Text.RegularExpressions;
+using Jellyfin.Data.Enums;
 using MediaBrowser.Common.Configuration;
+using MediaBrowser.Controller.Entities;
+using MediaBrowser.Controller.Library;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
@@ -18,18 +21,85 @@ public sealed class GelatoApiController : ControllerBase
 {
     private readonly ILogger<GelatoApiController> _log;
     private readonly GelatoManager _gelatoManager;
+    private readonly ILibraryManager _libraryManager;
     private readonly string _downloadPath;
 
     public GelatoApiController(
         ILogger<GelatoApiController> log,
         IApplicationPaths appPaths,
-        GelatoManager gelatoManager
+        GelatoManager gelatoManager,
+        ILibraryManager libraryManager
     )
     {
         _log = log;
         _gelatoManager = gelatoManager;
+        _libraryManager = libraryManager;
         _downloadPath = Path.Combine(appPaths.CachePath, "gelato-torrents");
         Directory.CreateDirectory(_downloadPath);
+    }
+
+    // Card-open today blocks on SyncStreams (a network round trip to the
+    // Stremio addon) the first time an item is opened, since
+    // MediaSourceManagerDecorator.GetStaticMediaSources needs the stream
+    // list before it can answer. This endpoint lets the frontend fire that
+    // same sync speculatively (e.g. when a poster gains focus, well before
+    // the user actually opens the detail page), so by the time the item is
+    // opened for real the sync is already cached and GetStaticMediaSources
+    // just skips straight to reading it back from the DB.
+    //
+    // Reuses the exact same cache key shape and HasStreamSync/SetStreamSync
+    // guard MediaSourceManagerDecorator uses, so a real card-open racing a
+    // prefetch never double-syncs.
+    [HttpPost("prefetch/{itemId:guid}")]
+    [Authorize]
+    public ActionResult PrefetchStreams([FromRoute, Required] Guid itemId)
+    {
+        if (!HttpContext.TryGetUserId(out var userId))
+        {
+            return Unauthorized();
+        }
+
+        var item = _libraryManager.GetItemById(itemId);
+        if (item is null)
+        {
+            return NotFound();
+        }
+
+        if (item.GetBaseItemKind() is not (BaseItemKind.Movie or BaseItemKind.Episode))
+        {
+            return BadRequest("Prefetch only supports movies and episodes.");
+        }
+
+        var video = item as Video;
+        var cacheKey = Guid.TryParse(video?.PrimaryVersionId, out var versionId)
+            ? versionId.ToString()
+            : item.Id.ToString();
+        cacheKey = $"{userId}:{cacheKey}";
+
+        if (_gelatoManager.HasStreamSync(cacheKey))
+        {
+            return Accepted();
+        }
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var count = await _gelatoManager
+                    .SyncStreams(item, userId, CancellationToken.None)
+                    .ConfigureAwait(false);
+                if (count > 0)
+                {
+                    _gelatoManager.SetStreamSync(cacheKey);
+                }
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "Prefetch sync failed for {ItemId}", itemId);
+            }
+        });
+
+        return Accepted();
     }
 
     [HttpGet("meta/{stremioMetaType}/{Id}")]
