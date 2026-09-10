@@ -4,6 +4,14 @@ on:
   release:
     types:
       - released
+      # Confirmed live on this fork: gh release edit's draft->published
+      # transition (used to re-fire a release event without cutting a
+      # new version) only ever emits action: published, never released,
+      # for a plain non-draft/non-prerelease release here - released
+      # alone left this workflow silently never triggering. Both types
+      # are harmless to list together (GitHub dedupes an event that
+      # matches more than one listed type into a single run).
+      - published
   workflow_dispatch:
 
 permissions:
