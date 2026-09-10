@@ -3,6 +3,7 @@
 using System.ComponentModel.DataAnnotations;
 using System.Net;
 using System.Text.RegularExpressions;
+using Gelato.Filters;
 using Jellyfin.Data.Enums;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller.Dto;
@@ -27,6 +28,7 @@ public sealed class GelatoApiController : ControllerBase
     private readonly IUserManager _userManager;
     private readonly IMediaSourceManager _mediaSourceManager;
     private readonly IDtoService _dtoService;
+    private readonly InsertActionFilter _insertActionFilter;
     private readonly string _downloadPath;
 
     public GelatoApiController(
@@ -36,7 +38,8 @@ public sealed class GelatoApiController : ControllerBase
         ILibraryManager libraryManager,
         IUserManager userManager,
         IMediaSourceManager mediaSourceManager,
-        IDtoService dtoService
+        IDtoService dtoService,
+        InsertActionFilter insertActionFilter
     )
     {
         _log = log;
@@ -45,6 +48,7 @@ public sealed class GelatoApiController : ControllerBase
         _userManager = userManager;
         _mediaSourceManager = mediaSourceManager;
         _dtoService = dtoService;
+        _insertActionFilter = insertActionFilter;
         _downloadPath = Path.Combine(appPaths.CachePath, "gelato-torrents");
         Directory.CreateDirectory(_downloadPath);
     }
@@ -73,7 +77,7 @@ public sealed class GelatoApiController : ControllerBase
         var item = _libraryManager.GetItemById(itemId);
         if (item is null)
         {
-            return NotFound();
+            return PrefetchInsert(itemId, userId);
         }
 
         if (item.GetBaseItemKind() is not (BaseItemKind.Movie or BaseItemKind.Episode))
@@ -130,6 +134,93 @@ public sealed class GelatoApiController : ControllerBase
             catch (Exception ex)
             {
                 _log.LogWarning(ex, "Prefetch sync failed for {ItemId}", itemId);
+            }
+        });
+
+        return Accepted();
+    }
+
+    // A search result's own item id (gelato/search/movie|series's own
+    // stremioUri.ToGuid(), Filters/SearchActionFilter.cs's real
+    // counterpart) never exists in the library at all until it is opened
+    // for the first time - InsertActionFilter.cs normally does exactly
+    // this insert synchronously, blocking the very first detail-page
+    // open on a real Stremio meta fetch (GetMetaAsync) plus TMDb digital-
+    // release-date enrichment and an image download, all before the page
+    // can render anything at all. Same real bottleneck class as the
+    // stream-sync half of this endpoint above, just one step earlier in
+    // the pipeline: a poster's own focus can warm this too, well before
+    // Select ever needs it.
+    //
+    // Reuses InsertActionFilter.InsertMetaAsync directly (it is a plain
+    // injectable singleton, not something only the MVC filter pipeline
+    // can reach) rather than duplicating its logic. The resulting real
+    // item's Id will not equal itemId (Jellyfin's own
+    // GetNewItemId(path, type) decides that, not the search result's own
+    // synthetic guid - InsertActionFilter.cs's own meta.Guid assignment
+    // is dead code, confirmed nothing reads it), but that does not
+    // matter: a real open still routes through InsertActionFilter again,
+    // and its own FindExistingItem provider-id lookup finds this
+    // already-inserted item and redirects to it without re-fetching
+    // anything, the same fast path a duplicate real open already takes
+    // today.
+    private ActionResult PrefetchInsert(Guid itemId, Guid userId)
+    {
+        var stremioMeta = _gelatoManager.GetStremioMeta(itemId);
+        if (stremioMeta is null)
+        {
+            return NotFound();
+        }
+
+        var user = _userManager.GetUserById(userId);
+        if (user is null)
+        {
+            return Unauthorized();
+        }
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var isSeries = stremioMeta.Type == StremioMediaType.Series;
+                var root = isSeries
+                    ? _gelatoManager.TryGetSeriesFolder(userId)
+                    : _gelatoManager.TryGetMovieFolder(userId);
+                if (root is null)
+                {
+                    return;
+                }
+
+                if (
+                    _gelatoManager.IntoBaseItem(stremioMeta) is { } candidate
+                    && _gelatoManager.FindExistingItem(candidate, user) is not null
+                )
+                {
+                    // Something else (a real open, a duplicate prefetch) already
+                    // inserted this between the card rendering and this firing.
+                    return;
+                }
+
+                var cfg = GelatoPlugin.Instance!.GetConfig(userId);
+                var meta = await cfg
+                    .Stremio.GetMetaAsync(stremioMeta.ImdbId ?? stremioMeta.Id, stremioMeta.Type)
+                    .ConfigureAwait(false);
+                if (meta is null)
+                {
+                    return;
+                }
+
+                var inserted = await _insertActionFilter
+                    .InsertMetaAsync(itemId, root, meta, user)
+                    .ConfigureAwait(false);
+                if (inserted is not null)
+                {
+                    _gelatoManager.RemoveStremioMeta(itemId);
+                }
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "Prefetch insert failed for {ItemId}", itemId);
             }
         });
 
