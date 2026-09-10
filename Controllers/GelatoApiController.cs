@@ -5,8 +5,10 @@ using System.Net;
 using System.Text.RegularExpressions;
 using Jellyfin.Data.Enums;
 using MediaBrowser.Common.Configuration;
+using MediaBrowser.Controller.Dto;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Model.Dto;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
@@ -22,18 +24,27 @@ public sealed class GelatoApiController : ControllerBase
     private readonly ILogger<GelatoApiController> _log;
     private readonly GelatoManager _gelatoManager;
     private readonly ILibraryManager _libraryManager;
+    private readonly IUserManager _userManager;
+    private readonly IMediaSourceManager _mediaSourceManager;
+    private readonly IDtoService _dtoService;
     private readonly string _downloadPath;
 
     public GelatoApiController(
         ILogger<GelatoApiController> log,
         IApplicationPaths appPaths,
         GelatoManager gelatoManager,
-        ILibraryManager libraryManager
+        ILibraryManager libraryManager,
+        IUserManager userManager,
+        IMediaSourceManager mediaSourceManager,
+        IDtoService dtoService
     )
     {
         _log = log;
         _gelatoManager = gelatoManager;
         _libraryManager = libraryManager;
+        _userManager = userManager;
+        _mediaSourceManager = mediaSourceManager;
+        _dtoService = dtoService;
         _downloadPath = Path.Combine(appPaths.CachePath, "gelato-torrents");
         Directory.CreateDirectory(_downloadPath);
     }
@@ -92,6 +103,29 @@ public sealed class GelatoApiController : ControllerBase
                 {
                     _gelatoManager.SetStreamSync(cacheKey);
                 }
+
+                // Sync alone only warms the stream list itself. Pressing
+                // Play still hits GetPlaybackMediaSources' own NeedsProbe
+                // check next, which blocks on a real ffprobe against the
+                // resolved stream (MediaSourceManagerDecorator.cs) since a
+                // freshly synced stream never carries real MediaStreams -
+                // there is no way to know a debrid/torrent source's real
+                // codecs/container without actually reading it. Warming
+                // that here too, in the same background prefetch window,
+                // means a real Play later reuses the cached probe result
+                // (NeedsProbe false the second time) instead of paying for
+                // it at the one moment a reader is actually waiting.
+                // GetPlaybackMediaSources is the exact same call Play
+                // itself makes; IMediaSourceManager resolves to
+                // MediaSourceManagerDecorator (ServiceRegistrator.cs), so
+                // this runs its real probe/segment logic, not a stub.
+                var user = _userManager.GetUserById(userId);
+                if (user is not null)
+                {
+                    await _mediaSourceManager
+                        .GetPlaybackMediaSources(item, user, true, false, CancellationToken.None)
+                        .ConfigureAwait(false);
+                }
             }
             catch (Exception ex)
             {
@@ -100,6 +134,109 @@ public sealed class GelatoApiController : ControllerBase
         });
 
         return Accepted();
+    }
+
+    // Real bottleneck: SearchActionFilter.cs intercepts the native
+    // GetItems search action and waits on Task.WhenAll(movie search,
+    // series search) before answering at all - a reader typing a query
+    // that matches both sections waits for whichever of the two takes
+    // longer, even though search.js's own results screen already renders
+    // Movies and Series as two independent sections once the combined
+    // answer lands. These two endpoints expose that exact same per-type
+    // search (same GelatoStremioProvider.SearchAsync call, same unreleased
+    // filter, same meta-to-BaseItemDto conversion SearchActionFilter.cs's
+    // own ConvertMetasToDtos already does) as two requests that resolve
+    // independently, so a client can fire both in parallel and paint
+    // whichever section's real addon round trip finishes first the
+    // moment it lands, matching Nuvio's own incremental-by-source search
+    // UI rather than Gelato's own previous all-or-nothing wait.
+    //
+    // Deliberately does not touch SearchActionFilter.cs or the native
+    // /Items endpoint it intercepts: other real Jellyfin clients still
+    // calling that endpoint directly keep getting the exact same combined
+    // answer they always have, this only adds a second, opt-in way in for
+    // callers (Jellio's own search screen) that want the two halves apart.
+    [HttpGet("search/movie")]
+    [Authorize]
+    public Task<ActionResult<IReadOnlyList<BaseItemDto>>> SearchMovies([FromQuery] string q) =>
+        SearchByTypeAsync(q, StremioMediaType.Movie);
+
+    [HttpGet("search/series")]
+    [Authorize]
+    public Task<ActionResult<IReadOnlyList<BaseItemDto>>> SearchSeries([FromQuery] string q) =>
+        SearchByTypeAsync(q, StremioMediaType.Series);
+
+    private async Task<ActionResult<IReadOnlyList<BaseItemDto>>> SearchByTypeAsync(
+        string q,
+        StremioMediaType mediaType
+    )
+    {
+        if (string.IsNullOrWhiteSpace(q))
+        {
+            return Ok(Array.Empty<BaseItemDto>());
+        }
+
+        if (!HttpContext.TryGetUserId(out var userId))
+        {
+            return Unauthorized();
+        }
+
+        var cfg = GelatoPlugin.Instance!.GetConfig(userId);
+        if (cfg.DisableSearch || !await cfg.Stremio.IsReady().ConfigureAwait(false))
+        {
+            return Ok(Array.Empty<BaseItemDto>());
+        }
+
+        var folder =
+            mediaType == StremioMediaType.Movie
+                ? cfg.MovieFolder ?? _gelatoManager.TryGetMovieFolder(userId)
+                : cfg.SeriesFolder ?? _gelatoManager.TryGetSeriesFolder(userId);
+        if (folder is null)
+        {
+            _log.LogWarning(
+                "SearchByType: no {MediaType} folder found, please add your gelato path to a library and rescan.",
+                mediaType
+            );
+            return Ok(Array.Empty<BaseItemDto>());
+        }
+
+        var metas = (await cfg.Stremio.SearchAsync(q, mediaType).ConfigureAwait(false)).ToList();
+
+        if (cfg.FilterUnreleased)
+        {
+            metas = metas.Where(m => m.IsReleased(cfg.FilterUnreleasedBufferDays)).ToList();
+        }
+
+        var options = new DtoOptions { EnableImages = true, EnableUserData = false };
+        var dtos = new List<BaseItemDto>(metas.Count);
+        foreach (var meta in metas)
+        {
+            var baseItem = _gelatoManager.IntoBaseItem(meta);
+            if (baseItem is null)
+            {
+                continue;
+            }
+
+            var dto = _dtoService.GetBaseItemDto(baseItem, options);
+            var stremioUri = StremioUri.FromBaseItem(baseItem);
+            if (stremioUri is null)
+            {
+                continue;
+            }
+
+            dto.Id = stremioUri.ToGuid();
+            dtos.Add(dto);
+            _gelatoManager.SaveStremioMeta(dto.Id, meta);
+        }
+
+        _log.LogInformation(
+            "SearchByType \"{Query}\" type={MediaType} results={Results}",
+            q,
+            mediaType,
+            dtos.Count
+        );
+
+        return Ok(dtos);
     }
 
     [HttpGet("meta/{stremioMetaType}/{Id}")]
