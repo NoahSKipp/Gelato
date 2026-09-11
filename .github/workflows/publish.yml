@@ -44,6 +44,13 @@ jobs:
         with:
           upload_url: ${{ github.event.release.upload_url }}
           asset_path: ./*
+          # A plain, immediate (non-draft) release fires both released and
+          # published (confirmed live on v0.26.18.0's own run), so this job
+          # runs twice for the same release. The first run's own upload
+          # always wins; without this the second just fails outright on
+          # "file name already exists" instead of finishing as the no-op
+          # it actually is.
+          overwrite: true
   generate:
     runs-on: ubuntu-latest
     needs:
