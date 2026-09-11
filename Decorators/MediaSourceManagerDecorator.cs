@@ -403,7 +403,30 @@ public sealed class MediaSourceManagerDecorator(
 
         // Stub path after probing is done so the real URL is never sent to clients.
         // Force File protocol so clients proxy through Jellyfin instead of direct-playing.
-        if (ctx.GetActionName() == "GetPostedPlaybackInfo")
+        //
+        // Matched by route+method rather than the controller action's literal name:
+        // that name is Jellyfin core's own internal identifier and has silently changed
+        // across major versions before (see the Legacy-suffixed actions elsewhere in this
+        // repo). A mismatch here means the transcoding-decision engine sees an unstubbed
+        // remote HTTP source with SupportsDirectPlay=true and skips transcoding entirely -
+        // exactly the "every stream serves a raw MKV to the browser" regression this
+        // guarded against once already.
+        var isPlaybackInfoPost =
+            string.Equals(ctx?.Request.Method, "POST", StringComparison.OrdinalIgnoreCase)
+            && (ctx?.Request.Path.Value?.Contains("/PlaybackInfo", StringComparison.OrdinalIgnoreCase) ?? false);
+
+        if (isPlaybackInfoPost != (ctx.GetActionName() == "GetPostedPlaybackInfo"))
+        {
+            _log.LogWarning(
+                "PlaybackInfo stub gate mismatch: route-based={RouteBased} actionName-based={ActionBased} action={Action} path={Path}",
+                isPlaybackInfoPost,
+                ctx.GetActionName() == "GetPostedPlaybackInfo",
+                ctx.GetActionName(),
+                ctx?.Request.Path.Value
+            );
+        }
+
+        if (isPlaybackInfoPost)
         {
             selected.Path = "/stub";
             selected.IsRemote = false;
