@@ -89,11 +89,10 @@ public sealed class GelatoApiController : ControllerBase
             return BadRequest("Prefetch only supports movies and episodes.");
         }
 
+        // PrimaryVersionId is Guid? as of Jellyfin 12 (was string), matching
+        // MediaSourceManagerDecorator.cs's own real cache-key construction.
         var video = item as Video;
-        var cacheKey = Guid.TryParse(video?.PrimaryVersionId, out var versionId)
-            ? versionId.ToString()
-            : item.Id.ToString();
-        cacheKey = $"{userId}:{cacheKey}";
+        var cacheKey = $"{userId}:{video?.PrimaryVersionId ?? item.Id}";
 
         if (_gelatoManager.HasStreamSync(cacheKey))
         {
