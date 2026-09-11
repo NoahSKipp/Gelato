@@ -8,6 +8,14 @@
     "owner": "lstb1t",
     "versions": [
       {
+        "changelog": "## [0.26.18.0] - 2026-09-11\n\n### 🚀 Features\n\n- Prefetch not-yet-inserted search results too\n\n### 🐛 Bug Fixes\n\n- Protect the library during the Jellyfin 12 upgrade (#204)\n\n### ⚙️ Miscellaneous Tasks\n\n- Also fire Publish Plugin on release:published, not just released\n- *(release)* Bump version to v0.26.16.1\n\n### 💼 Other\n\n- Upstream Jellyfin 12 upgrade protection (lostb1t/gelato#204)\n",
+        "checksum": "1a1960b7e2bbf36665e50c0355905b2b",
+        "sourceUrl": "https://github.com/NoahSKipp/Gelato/releases/download/v0.26.18.0/gelato_0.26.18.0.zip",
+        "targetAbi": "10.11.6.0",
+        "timestamp": "2026-09-11T09:31:46Z",
+        "version": "0.26.18.0"
+      },
+      {
         "changelog": "## [0.26.17.0] - 2026-09-10\n\n### 🚀 Features\n\n- Add speculative stream prefetch endpoint\n\n### ⚡ Performance\n\n- Warm playback probe on prefetch, split search by type\n\n### 💼 Other\n\n- Speculative stream/probe prefetch and split search\n",
         "checksum": "1c67d09a62adaa8fbc0486b36a74ebe6",
         "sourceUrl": "https://github.com/NoahSKipp/Gelato/releases/download/v0.26.17.0/gelato_0.26.17.0.zip",
