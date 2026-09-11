@@ -8,6 +8,14 @@
     "owner": "lstb1t",
     "versions": [
       {
+        "changelog": "## [0.26.19.1] - 2026-09-11\n\n### 🐛 Bug Fixes\n\n- Stop gating the playback stub on Jellyfin's internal action name\n\n### 📚 Documentation\n\n- Note two parked AIOStreams-side latency levers\n- Note a third parked AIOStreams lever - cacheAndPlay\n- Turn performance notes into an action guide\n",
+        "checksum": "1703dcbed2fa537d0f604f897cac9ff3",
+        "sourceUrl": "https://github.com/NoahSKipp/Gelato/releases/download/v0.26.19.1/gelato_0.26.19.1.zip",
+        "targetAbi": "12.0.0.0",
+        "timestamp": "2026-09-11T22:39:54Z",
+        "version": "0.26.19.1"
+      },
+      {
         "changelog": "## [0.26.19.0] - 2026-09-11\n\n### 🚀 Features\n\n- Add Jellyfin 12 support\n\n### 🐛 Bug Fixes\n\n- Adapt PrimaryVersionId cache-key parsing for Jellyfin 12\n\n### ⚙️ Miscellaneous Tasks\n\n- Overwrite duplicate release assets on the second publish run\n\n### 💼 Other\n\n- Jellyfin 12 support (server upgraded)\n",
         "checksum": "c4a1a29953e975316bc9a5bdfc30a200",
         "sourceUrl": "https://github.com/NoahSKipp/Gelato/releases/download/v0.26.19.0/gelato_0.26.19.0.zip",
