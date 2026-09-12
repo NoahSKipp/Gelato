@@ -552,6 +552,20 @@ public sealed class MediaSourceManagerDecorator(
             ? $"{streamName}\n{streamDesc}"
             : streamName;
 
+        // Only ever true when AIOStreams' PROVIDE_STREAM_DATA setting is on
+        // (GelatoManager.SyncStreams only writes this GelatoData key then).
+        // MediaSourceInfo has no field of its own for "this is already a
+        // debrid-cached hit, no real download wait ahead" - Formats is the
+        // one real field here EncodingHelper.cs never reads for an actual
+        // ffmpeg/transcode decision (only ever written from real ffprobe
+        // results elsewhere, MediaSourceManager.cs/LiveStreamHelper.cs, and
+        // never read anywhere else in Jellyfin core), so a synthetic marker
+        // riding along in it never reaches the real remote source the way
+        // RequiredHttpHeaders would (that one really is forwarded to ffmpeg
+        // as literal headers - confirmed directly, not guessed - and would
+        // have leaked this straight to a real debrid/usenet origin).
+        var isConfirmedCached = item.GelatoData<bool?>("cached") == true;
+
         var info = new MediaSourceInfo
         {
             Id = item.Id.ToString("N", CultureInfo.InvariantCulture),
@@ -570,6 +584,7 @@ public sealed class MediaSourceManagerDecorator(
             // just always say yes
             HasSegments = true,
             //HasSegments = MediaSegmentManager.HasSegments(item.Id)
+            Formats = isConfirmedCached ? ["gelato-cached"] : [],
         };
 
 

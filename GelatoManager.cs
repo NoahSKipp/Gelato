@@ -627,6 +627,12 @@ public sealed class GelatoManager(
             {
                 streamItem.SetGelatoData("filename", s.BehaviorHints.Filename);
             }
+            // Only present with AIOStreams' PROVIDE_STREAM_DATA on; absent
+            // (Service null) otherwise, same as every field above it.
+            if (s.StreamData?.Service is { } service)
+            {
+                streamItem.SetGelatoData("cached", service.Cached);
+            }
             streamItem.SetGelatoData("index", index);
             streamItem.SetGelatoData("guid", streamGuid);
             // Keep map current so stale detection below uses the final upserted set.

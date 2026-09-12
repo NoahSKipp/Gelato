@@ -814,6 +814,7 @@ public class StremioStream
     public int? FileIdx { get; set; }
     public List<string>? Sources { get; set; }
     public StremioBehaviorHints? BehaviorHints { get; set; }
+    public StremioStreamData? StreamData { get; set; }
 
     public string GetName()
     {
@@ -885,6 +886,24 @@ public class StremioBehaviorHints
     public string? Filename { get; set; }
     public bool Configurable { get; set; }
     public bool ConfigurationRequired { get; set; }
+}
+
+// Only present when the addon's PROVIDE_STREAM_DATA setting is on;
+// absent (both this and .Service null) otherwise. Real shape confirmed
+// against Viren070/AIOStreams' own ParsedStreamSchema
+// (packages/core/src/db/schemas.ts) and StremioTransformer
+// (packages/core/src/transformers/stremio.ts) rather than guessed -
+// only the one field this repo currently has a use for is modelled
+// here, not every field AIOStreams attaches.
+public class StremioStreamData
+{
+    public StremioStreamService? Service { get; set; }
+}
+
+public class StremioStreamService
+{
+    public string? Id { get; set; }
+    public bool Cached { get; set; }
 }
 
 public class StremioOptions
