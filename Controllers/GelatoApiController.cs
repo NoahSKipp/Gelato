@@ -10,6 +10,7 @@ using MediaBrowser.Controller;
 using MediaBrowser.Controller.Dto;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.MediaEncoding;
 using MediaBrowser.Model.Dto;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -31,6 +32,7 @@ public sealed class GelatoApiController : ControllerBase
     private readonly IDtoService _dtoService;
     private readonly InsertActionFilter _insertActionFilter;
     private readonly IServerApplicationHost _appHost;
+    private readonly ISubtitleEncoder _subtitleEncoder;
     private readonly string _downloadPath;
 
     public GelatoApiController(
@@ -42,7 +44,8 @@ public sealed class GelatoApiController : ControllerBase
         IMediaSourceManager mediaSourceManager,
         IDtoService dtoService,
         InsertActionFilter insertActionFilter,
-        IServerApplicationHost appHost
+        IServerApplicationHost appHost,
+        ISubtitleEncoder subtitleEncoder
     )
     {
         _log = log;
@@ -53,9 +56,16 @@ public sealed class GelatoApiController : ControllerBase
         _dtoService = dtoService;
         _insertActionFilter = insertActionFilter;
         _appHost = appHost;
+        _subtitleEncoder = subtitleEncoder;
         _downloadPath = Path.Combine(appPaths.CachePath, "gelato-torrents");
         Directory.CreateDirectory(_downloadPath);
     }
+
+    // English/German specifically: real feedback asked for these two to
+    // load "instantly like Netflix", not every language Gelato Subtitles
+    // might attach. Broadening this list broadens the background work
+    // every prefetch now pays for, not something to do without being asked.
+    private static readonly string[] PrewarmSubtitleLanguages = ["eng", "ger", "deu"];
 
     // Card-open today blocks on SyncStreams (a network round trip to the
     // Stremio addon) the first time an item is opened, since
@@ -129,9 +139,66 @@ public sealed class GelatoApiController : ControllerBase
                 var user = _userManager.GetUserById(userId);
                 if (user is not null)
                 {
-                    await _mediaSourceManager
+                    var sources = await _mediaSourceManager
                         .GetPlaybackMediaSources(item, user, true, false, CancellationToken.None)
                         .ConfigureAwait(false);
+
+                    // Same real bottleneck class as the probe above: a
+                    // real Play still hits SubtitleController's own
+                    // Stream.vtt endpoint the moment a reader picks a
+                    // track, which blocks on ISubtitleEncoder.GetSubtitles
+                    // actually extracting/converting that stream from a
+                    // remote debrid/torrent source (or the source's own
+                    // embedded PGS/ASS track) the first time it is asked
+                    // for - confirmed directly against
+                    // SubtitleEncoder.cs's own on-disk cache
+                    // (GetSubtitleCachePath + File.Exists), not guessed.
+                    // Warming English/German here means a reader who
+                    // picks either loads from that same cache instead of
+                    // paying for the real conversion at the one moment
+                    // they are actually waiting on it.
+                    foreach (var source in sources)
+                    {
+                        var subtitleStreams = (source.MediaStreams ?? [])
+                            .Where(s =>
+                                s.Type == MediaBrowser.Model.Entities.MediaStreamType.Subtitle
+                                && s.IsTextSubtitleStream
+                                && !string.IsNullOrEmpty(s.Language)
+                                && PrewarmSubtitleLanguages.Contains(
+                                    s.Language,
+                                    StringComparer.OrdinalIgnoreCase
+                                )
+                            )
+                            .ToList();
+
+                        foreach (var subtitleStream in subtitleStreams)
+                        {
+                            try
+                            {
+                                await using var stream = await _subtitleEncoder
+                                    .GetSubtitles(
+                                        item,
+                                        source.Id,
+                                        subtitleStream.Index,
+                                        "vtt",
+                                        0,
+                                        0,
+                                        false,
+                                        CancellationToken.None
+                                    )
+                                    .ConfigureAwait(false);
+                            }
+                            catch (Exception ex)
+                            {
+                                _log.LogWarning(
+                                    ex,
+                                    "Prefetch subtitle warm failed for {ItemId} stream {Index}",
+                                    itemId,
+                                    subtitleStream.Index
+                                );
+                            }
+                        }
+                    }
                 }
             }
             catch (Exception ex)
