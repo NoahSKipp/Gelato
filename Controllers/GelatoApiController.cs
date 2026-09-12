@@ -106,6 +106,27 @@ public sealed class GelatoApiController : ControllerBase
 
         if (_gelatoManager.HasStreamSync(cacheKey))
         {
+            // Real bug, found live: this early return meant every prefetch
+            // after the very first one for a given title skipped the whole
+            // Task.Run below entirely - WarmPlaybackDataAsync (the probe
+            // and subtitle warm-up) included - since streams only ever
+            // need syncing once. A title already played earlier today
+            // never got its subtitles warmed at all; only a genuinely
+            // never-opened title did. Firing the warm here too means a
+            // repeat prefetch (a reader refocusing a poster, reopening a
+            // detail page) still gets a chance to warm subtitles even
+            // when there is no stream sync left to do.
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await WarmPlaybackDataAsync(item, userId, itemId).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    _log.LogWarning(ex, "Prefetch subtitle warm failed for {ItemId}", itemId);
+                }
+            });
             return Accepted();
         }
 
@@ -136,70 +157,10 @@ public sealed class GelatoApiController : ControllerBase
                 // itself makes; IMediaSourceManager resolves to
                 // MediaSourceManagerDecorator (ServiceRegistrator.cs), so
                 // this runs its real probe/segment logic, not a stub.
-                var user = _userManager.GetUserById(userId);
-                if (user is not null)
-                {
-                    var sources = await _mediaSourceManager
-                        .GetPlaybackMediaSources(item, user, true, false, CancellationToken.None)
-                        .ConfigureAwait(false);
-
-                    // Same real bottleneck class as the probe above: a
-                    // real Play still hits SubtitleController's own
-                    // Stream.vtt endpoint the moment a reader picks a
-                    // track, which blocks on ISubtitleEncoder.GetSubtitles
-                    // actually extracting/converting that stream from a
-                    // remote debrid/torrent source (or the source's own
-                    // embedded PGS/ASS track) the first time it is asked
-                    // for - confirmed directly against
-                    // SubtitleEncoder.cs's own on-disk cache
-                    // (GetSubtitleCachePath + File.Exists), not guessed.
-                    // Warming English/German here means a reader who
-                    // picks either loads from that same cache instead of
-                    // paying for the real conversion at the one moment
-                    // they are actually waiting on it.
-                    foreach (var source in sources)
-                    {
-                        var subtitleStreams = (source.MediaStreams ?? [])
-                            .Where(s =>
-                                s.Type == MediaBrowser.Model.Entities.MediaStreamType.Subtitle
-                                && s.IsTextSubtitleStream
-                                && !string.IsNullOrEmpty(s.Language)
-                                && PrewarmSubtitleLanguages.Contains(
-                                    s.Language,
-                                    StringComparer.OrdinalIgnoreCase
-                                )
-                            )
-                            .ToList();
-
-                        foreach (var subtitleStream in subtitleStreams)
-                        {
-                            try
-                            {
-                                await using var stream = await _subtitleEncoder
-                                    .GetSubtitles(
-                                        item,
-                                        source.Id,
-                                        subtitleStream.Index,
-                                        "vtt",
-                                        0,
-                                        0,
-                                        false,
-                                        CancellationToken.None
-                                    )
-                                    .ConfigureAwait(false);
-                            }
-                            catch (Exception ex)
-                            {
-                                _log.LogWarning(
-                                    ex,
-                                    "Prefetch subtitle warm failed for {ItemId} stream {Index}",
-                                    itemId,
-                                    subtitleStream.Index
-                                );
-                            }
-                        }
-                    }
-                }
+                // WarmPlaybackDataAsync also warms English/German subtitle
+                // conversion once the probed sources are in hand - see its
+                // own header for why that specific call matters.
+                await WarmPlaybackDataAsync(item, userId, itemId).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -208,6 +169,70 @@ public sealed class GelatoApiController : ControllerBase
         });
 
         return Accepted();
+    }
+
+    private async Task WarmPlaybackDataAsync(BaseItem item, Guid userId, Guid itemId)
+    {
+        var user = _userManager.GetUserById(userId);
+        if (user is null)
+        {
+            return;
+        }
+
+        var sources = await _mediaSourceManager
+            .GetPlaybackMediaSources(item, user, true, false, CancellationToken.None)
+            .ConfigureAwait(false);
+
+        // Same real bottleneck class as the probe above: a real Play
+        // still hits SubtitleController's own Stream.vtt endpoint the
+        // moment a reader picks a track, which blocks on
+        // ISubtitleEncoder.GetSubtitles actually extracting/converting
+        // that stream from a remote debrid/torrent source (or the
+        // source's own embedded PGS/ASS track) the first time it is asked
+        // for - confirmed directly against SubtitleEncoder.cs's own
+        // on-disk cache (GetSubtitleCachePath + File.Exists), not
+        // guessed. Warming English/German here means a reader who picks
+        // either loads from that same cache instead of paying for the
+        // real conversion at the moment they are actually waiting on it.
+        foreach (var source in sources)
+        {
+            var subtitleStreams = (source.MediaStreams ?? [])
+                .Where(s =>
+                    s.Type == MediaBrowser.Model.Entities.MediaStreamType.Subtitle
+                    && s.IsTextSubtitleStream
+                    && !string.IsNullOrEmpty(s.Language)
+                    && PrewarmSubtitleLanguages.Contains(s.Language, StringComparer.OrdinalIgnoreCase)
+                )
+                .ToList();
+
+            foreach (var subtitleStream in subtitleStreams)
+            {
+                try
+                {
+                    await using var stream = await _subtitleEncoder
+                        .GetSubtitles(
+                            item,
+                            source.Id,
+                            subtitleStream.Index,
+                            "vtt",
+                            0,
+                            0,
+                            false,
+                            CancellationToken.None
+                        )
+                        .ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    _log.LogWarning(
+                        ex,
+                        "Prefetch subtitle warm failed for {ItemId} stream {Index}",
+                        itemId,
+                        subtitleStream.Index
+                    );
+                }
+            }
+        }
     }
 
     // A search result's own item id (gelato/search/movie|series's own
