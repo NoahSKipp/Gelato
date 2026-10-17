@@ -34,6 +34,7 @@ public sealed class GelatoManager(
 )
 {
     public const string StreamTag = "gelato-stream";
+    private const int MaxStaleDeletesPerSync = 50;
     public const string TreeSyncedTag = "gelato-tree-synced";
 
     /// <summary>Name of the file Gelato seeds into its library folders.</summary>
@@ -513,19 +514,53 @@ public sealed class GelatoManager(
             .Where(s => s is not null)
             .ToList();
 
-        // Get existing streams
-        var query = new InternalItemsQuery
-        {
-            IncludeItemTypes = [isEpisode ? BaseItemKind.Episode : BaseItemKind.Movie],
-            HasAnyProviderId = streamProviderIds,
-            Recursive = true,
-            IsDeadPerson = true,
-            //  IsVirtualItem = true,
-        };
+        // Get existing streams. Same shape as the stream listing in
+        // MediaSourceManagerDecorator.GetStaticMediaSources: match on the
+        // Stremio id plus the stream tag in SQL, with grouping off. On
+        // Jellyfin 12 the old query (all provider ids, filtered in memory
+        // through IsStream(), which reads item.Tags) came back without any of
+        // the existing stream rows, so stale rows never lost this user and
+        // every sync piled another full set on top (300+ per episode, most
+        // of them dead links).
+        var query =
+            video is Episode episodeVideo
+                ? new InternalItemsQuery
+                {
+                    IncludeItemTypes = [BaseItemKind.Episode],
+                    ParentId = episodeVideo.SeasonId,
+                    Recursive = false,
+                    GroupByPresentationUniqueKey = false,
+                    GroupBySeriesPresentationUniqueKey = false,
+                    CollapseBoxSetItems = false,
+                    IsDeadPerson = true,
+                    Tags = [StreamTag],
+                    IndexNumber = episodeVideo.IndexNumber,
+                }
+                : new InternalItemsQuery
+                {
+                    IncludeItemTypes = [BaseItemKind.Movie],
+                    HasAnyProviderId = new Dictionary<string, string>
+                    {
+                        { "Stremio", uri.ExternalId },
+                    },
+                    Recursive = false,
+                    GroupByPresentationUniqueKey = false,
+                    GroupBySeriesPresentationUniqueKey = false,
+                    CollapseBoxSetItems = false,
+                    IsDeadPerson = true,
+                    Tags = [StreamTag],
+                };
 
         var existingStreamItems = repo.GetItemList(query)
             .OfType<Video>()
-            .Where(v => v.IsStream())
+            .Where(v =>
+                v.Id != video.Id
+                && string.Equals(
+                    v.GetProviderId("Stremio"),
+                    uri.ExternalId,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
             .ToList();
 
         // Match stream rows by persisted Gelato guid, not by volatile playback URL/path.
@@ -662,25 +697,39 @@ public sealed class GelatoManager(
         var toDelete = stale
             .Where(item => item.GelatoData<List<Guid>>("userIds") is { Count: 0 })
             .ToList();
-        var toSave = stale.Except(toDelete).ToList();
 
-        try
+        // Persist the userId removal for every stale row, orphans included.
+        // This used to save only the rows other users still held, while the
+        // orphans' delete was commented out, so the removal never reached the
+        // database: a stale row kept this user and stayed in the stream list
+        // for good. Saving all of them hides them from the list right away.
+        persistence.SaveItems(stale, ct);
+
+        // Then drop orphans, a bounded batch per sync so a title with a large
+        // backlog doesn't stall the sync the reader is waiting on.
+        foreach (var staleItem in toDelete.Take(MaxStaleDeletesPerSync))
         {
-            //repo.DeleteItem([.. toDelete.Select(f => f.Id)]);
-        }
-        catch
-        {
-            foreach (var staleItem in toDelete)
+            try
             {
                 libraryManager.DeleteItem(
                     staleItem,
-                    new DeleteOptions { DeleteFileLocation = true },
-                    true
+                    new DeleteOptions { DeleteFileLocation = false },
+                    false
                 );
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "Failed to delete stale stream {ItemId}", staleItem.Id);
             }
         }
 
-        persistence.SaveItems(toSave, ct);
+        _log.LogDebug(
+            "SyncStreams stale rows GelatoId={Id}: existing={Existing} stale={Stale} orphaned={Orphaned}",
+            uri.ExternalId,
+            existingStreamItems.Count,
+            stale.Count,
+            toDelete.Count
+        );
         upsertedStreams.Add(video);
 
         stopwatch.Stop();

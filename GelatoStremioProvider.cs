@@ -829,9 +829,25 @@ public class StremioStream
     {
         string key;
 
+        // AIOStreams' encrypted proxy links (/api/v1/proxy/e.<iv>...) carry a
+        // fresh random IV on every request, so the URL differs on every sync
+        // even for the very same release. Keying on it gave every sync a
+        // brand-new set of stream rows and media source ids, leaving the ids a
+        // client had just been shown pointing at links AIOStreams had already
+        // expired ("not found in store", HTTP 400). The release's filename +
+        // binge group + size is stable across calls and unique per release.
+        if (
+            !string.IsNullOrEmpty(Url)
+            && Url.Contains("/api/v1/proxy/", StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrEmpty(BehaviorHints?.Filename)
+        )
+        {
+            key =
+                $"aio:{BehaviorHints.BingeGroup}|{BehaviorHints.Filename}|{BehaviorHints.VideoSize}";
+        }
         // Prefer URL identity when a direct URL exists, even if InfoHash is present.
         // Some providers attach the same InfoHash to multiple hosters (e.g. Dropload/SuperVideo).
-        if (!string.IsNullOrEmpty(Url))
+        else if (!string.IsNullOrEmpty(Url))
         {
             key = Url;
         }
