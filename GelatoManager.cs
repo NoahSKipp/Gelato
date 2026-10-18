@@ -892,13 +892,18 @@ public sealed class GelatoManager(
             .OfType<Episode>()
             .Where(x => !x.IsStream() && x.IndexNumber.HasValue && x.ParentIndexNumber.HasValue)
             .GroupBy(e => e.ParentIndexNumber!.Value)
-            .ToDictionary(g => g.Key, g => g.Select(e => e.IndexNumber!.Value).ToHashSet());
+            .ToDictionary(
+                g => g.Key,
+                g => g.GroupBy(e => e.IndexNumber!.Value).ToDictionary(x => x.Key, x => x.First())
+            );
 
         var seasonsInserted = 0;
         var episodesInserted = 0;
+        var episodesUpdated = 0;
 
         var newSeasons = new List<Season>();
         var allNewEpisodes = new List<Episode>();
+        var updatedEpisodes = new List<Episode>();
 
         var seriesStremioId = series.GetProviderId("Stremio");
         var seriesPresentationKey = series.GetPresentationUniqueKey();
@@ -965,8 +970,8 @@ public sealed class GelatoManager(
             }
 
             // Look up existing episodes for this season from the pre-fetched dict
-            var existingEpisodeNumbers = existingEpisodesBySeason.TryGetValue(seasonIndex, out var epNums)
-                ? epNums
+            var existingEpisodes = existingEpisodesBySeason.TryGetValue(seasonIndex, out var eps)
+                ? eps
                 : [];
             foreach (var epMeta in seasonGroup)
             {
@@ -984,12 +989,13 @@ public sealed class GelatoManager(
                     continue;
                 }
 
-                if (existingEpisodeNumbers.Contains(index.Value))
+                if (existingEpisodes.TryGetValue(index.Value, out var existingEpisode))
                 {
-                    _log.LogTrace(
-                        "Episode {EpisodeName} already exists, skipping",
-                        epMeta.GetName()
-                    );
+                    if (RefreshExistingEpisode(existingEpisode, epMeta))
+                    {
+                        updatedEpisodes.Add(existingEpisode);
+                        episodesUpdated++;
+                    }
                     continue;
                 }
 
@@ -1033,13 +1039,17 @@ public sealed class GelatoManager(
         if (allNewEpisodes.Count > 0)
             persistence.SaveItems(allNewEpisodes, ct);
 
+        if (updatedEpisodes.Count > 0)
+            persistence.SaveItems(updatedEpisodes, ct);
+
         stopwatch.Stop();
 
         _log.LogDebug(
-            "Sync completed for {SeriesName}: {SeasonsInserted} season(s) and {EpisodesInserted} episode(s) in {Dur}",
+            "Sync completed for {SeriesName}: {SeasonsInserted} season(s), {EpisodesInserted} new and {EpisodesUpdated} refreshed episode(s) in {Dur}",
             series.Name,
             seasonsInserted,
             episodesInserted,
+            episodesUpdated,
             stopwatch.Elapsed.TotalSeconds
         );
 
@@ -1484,6 +1494,99 @@ public sealed class GelatoManager(
 
         persistence.SaveItems(baseItems, CancellationToken.None);
         return baseItems;
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex GenericEpisodeName = new(
+        @"^\s*(episode|folge|ep\.?|e)\s*\d+\s*$",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase
+            | System.Text.RegularExpressions.RegexOptions.Compiled
+    );
+
+    /// <summary>
+    /// Brings an already-created Gelato episode in line with the series meta.
+    /// The tree sync used to skip existing episodes entirely, so an episode
+    /// first created before the metadata source had its title, description
+    /// or thumbnail (common for new shows) stayed blank or stale for good.
+    /// Only Gelato stub episodes are touched, never local files, and locked
+    /// fields are left alone. Returns true when something changed.
+    /// </summary>
+    private bool RefreshExistingEpisode(Episode episode, StremioMeta meta)
+    {
+        if (!(episode.Path?.StartsWith("gelato", StringComparison.OrdinalIgnoreCase) ?? false))
+            return false;
+
+        var locked = episode.LockedFields ?? [];
+        var changed = false;
+
+        var name = meta.GetName();
+        if (
+            !locked.Contains(MetadataField.Name)
+            && !string.IsNullOrWhiteSpace(name)
+            && !GenericEpisodeName.IsMatch(name)
+            && !string.Equals(episode.Name, name, StringComparison.Ordinal)
+        )
+        {
+            episode.Name = name;
+            changed = true;
+        }
+
+        var overview = meta.Description ?? meta.Overview;
+        if (
+            !locked.Contains(MetadataField.Overview)
+            && !string.IsNullOrWhiteSpace(overview)
+            && !string.Equals(episode.Overview, overview, StringComparison.Ordinal)
+        )
+        {
+            episode.Overview = overview;
+            changed = true;
+        }
+
+        var premiere = meta.GetPremiereDate();
+        // Compare by day: stored and parsed values can differ in DateTimeKind only.
+        if (premiere.HasValue && episode.PremiereDate?.Date != premiere.Value.Date)
+        {
+            episode.PremiereDate = premiere;
+            changed = true;
+        }
+
+        if (!string.IsNullOrWhiteSpace(meta.Runtime) && !locked.Contains(MetadataField.Runtime))
+        {
+            var ticks = Utils.ParseToTicks(meta.Runtime);
+            if (ticks > 0 && episode.RunTimeTicks != ticks)
+            {
+                episode.RunTimeTicks = ticks;
+                changed = true;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(meta.Thumbnail))
+        {
+            var thumbChanged = !string.Equals(
+                episode.GetProviderId("StremioThumb"),
+                meta.Thumbnail,
+                StringComparison.Ordinal
+            );
+            if (thumbChanged || !episode.HasImage(ImageType.Primary))
+            {
+                episode.SetProviderId("StremioThumb", meta.Thumbnail);
+                ProviderManagerDecorator.SetRemoteImage(
+                    appPaths,
+                    episode,
+                    ImageType.Primary,
+                    null,
+                    meta.Thumbnail
+                );
+                changed = true;
+            }
+        }
+
+        if (changed)
+        {
+            episode.DateModified = DateTime.UtcNow;
+            episode.DateLastSaved = DateTime.UtcNow;
+        }
+
+        return changed;
     }
 
     public BaseItem? IntoBaseItem(StremioMeta meta)
