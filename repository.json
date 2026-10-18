@@ -8,6 +8,14 @@
     "owner": "lstb1t",
     "versions": [
       {
+        "changelog": "## [0.26.20.6] - 2026-10-18\n\n### 🐛 Bug Fixes\n\n- *(images)* Imported titles get their backdrop, logo and landscape art at once\n- *(images)* Keep serving library images to fetch() requests\n- *(search)* Adding a search result to the watchlist imports it first\n\n### ⚡ Performance\n\n- *(images)* Send image requests to the image host instead of waiting on a download\n\n### ⚙️ Miscellaneous Tasks\n\n- *(release)* Bump version to v0.26.20.6\n- *(release)* Undo manual version bump so the release workflow can bump it\n",
+        "checksum": "2c8c114ebf6adb66a7e6e4015ca21d8c",
+        "sourceUrl": "https://github.com/NoahSKipp/Gelato/releases/download/v0.26.20.6/gelato_0.26.20.6.zip",
+        "targetAbi": "12.0.0.0",
+        "timestamp": "2026-10-18T23:21:35Z",
+        "version": "0.26.20.6"
+      },
+      {
         "changelog": "### Bug Fixes\n- Series tree sync now refreshes existing Gelato episodes from the series meta (title, description, air date, runtime, thumbnail) instead of skipping them, so episodes first created before the metadata source had their details no longer stay blank or stale. Only Gelato stub episodes are touched, locked fields are respected, and unchanged episodes are not re-saved.",
         "checksum": "3917871e03049a144fc82c73aecdf71b",
         "sourceUrl": "https://github.com/NoahSKipp/Gelato/releases/download/v0.26.20.5/gelato_0.26.20.5.zip",
