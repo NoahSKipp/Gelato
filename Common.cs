@@ -285,6 +285,13 @@ public static class ActionContextExtensions
         "GetVideoStream",
         "GetDownload",
         "GetSubtitleWithTicks",
+        // Adding a search result to the watchlist or marking it watched
+        // imports it first, like opening it does, instead of failing on an
+        // id the library doesn't have.
+        "MarkFavoriteItem",
+        "MarkFavoriteItemLegacy",
+        "MarkPlayedItem",
+        "MarkPlayedItemLegacy",
     };
 
     private static readonly HashSet<string> InsertableListActionNames = new(

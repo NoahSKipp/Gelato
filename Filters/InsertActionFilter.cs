@@ -93,10 +93,13 @@ public class InsertActionFilter(
 
         // Insert the item
         var baseItem = await InsertMetaAsync(guid, root, meta, user);
+        // The search result's meta stays cached: a later request with the same
+        // search id (opening the card again after adding it to the watchlist)
+        // then finds the imported item above and goes to it, instead of
+        // failing on an id the library doesn't have.
         if (baseItem is not null)
         {
             ctx.ReplaceGuid(baseItem.Id);
-            manager.RemoveStremioMeta(guid);
         }
 
         await next();
