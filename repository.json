@@ -8,6 +8,14 @@
     "owner": "lstb1t",
     "versions": [
       {
+        "changelog": "### Bug Fixes\n- Series tree sync now refreshes existing Gelato episodes from the series meta (title, description, air date, runtime, thumbnail) instead of skipping them, so episodes first created before the metadata source had their details no longer stay blank or stale. Only Gelato stub episodes are touched, locked fields are respected, and unchanged episodes are not re-saved.",
+        "checksum": "3917871e03049a144fc82c73aecdf71b",
+        "sourceUrl": "https://github.com/NoahSKipp/Gelato/releases/download/v0.26.20.5/gelato_0.26.20.5.zip",
+        "targetAbi": "12.0.0.0",
+        "timestamp": "2026-10-18T02:37:27Z",
+        "version": "0.26.20.5"
+      },
+      {
         "changelog": "### Bug Fixes\n- Retire stale stream rows on Jellyfin 12: stream lists no longer pile up hundreds of expired AIOStreams links per title (they answered HTTP 400 and made playback cycle through dead streams).\n- Keep media source ids stable across syncs for AIOStreams proxy links (keyed on filename, binge group and size instead of the per-request URL).",
         "checksum": "ad7ab36531be4dedeab0e2b3dec24d36",
         "sourceUrl": "https://github.com/NoahSKipp/Gelato/releases/download/v0.26.20.4/gelato_0.26.20.4.zip",
