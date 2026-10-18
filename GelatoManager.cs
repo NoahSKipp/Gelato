@@ -1754,7 +1754,24 @@ public sealed class GelatoManager(
                 primaryImage
             );
 
+        // Backdrop, logo and landscape art from the start too, the same way as
+        // the poster: they used to appear only once the queued metadata refresh
+        // got to the item, which on a large import can take hours. An episode's
+        // meta only carries the series' art, so it is left to its thumbnail.
+        if (item is not Episode)
+        {
+            SetRemoteImageIfAny(item, ImageType.Backdrop, meta.Background);
+            SetRemoteImageIfAny(item, ImageType.Logo, meta.Logo);
+            SetRemoteImageIfAny(item, ImageType.Thumb, meta.LandscapePoster);
+        }
+
         return item;
+    }
+
+    private void SetRemoteImageIfAny(BaseItem item, ImageType type, string? url)
+    {
+        if (!string.IsNullOrWhiteSpace(url))
+            ProviderManagerDecorator.SetRemoteImage(appPaths, item, type, null, url);
     }
 
     /// <summary>
