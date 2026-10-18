@@ -71,7 +71,9 @@ public sealed partial class ImageResourceFilter(
                 : null;
         var width = RequestedWidth(ctx);
 
-        var url = SearchResultUrl(guid, type) ?? PlaceholderUrl(guid, type, index);
+        var url =
+            SearchResultUrl(guid, type)
+            ?? (FollowsRedirectToImageHost(ctx) ? PlaceholderUrl(guid, type, index) : null);
         if (url is null)
         {
             await next();
@@ -87,6 +89,16 @@ public sealed partial class ImageResourceFilter(
         );
         ctx.HttpContext.Response.Headers.CacheControl = "no-store";
         ctx.Result = new RedirectResult(target, permanent: false);
+    }
+
+    // An <img> load (Sec-Fetch-Dest: image) or a native app (no Sec-Fetch-*
+    // headers at all) follows the redirect fine. A page's own fetch() with auth
+    // headers, such as Jellio's offline downloads saving a cover, can't follow
+    // it to another origin, so those keep getting the image from this server.
+    private static bool FollowsRedirectToImageHost(ResourceExecutingContext ctx)
+    {
+        var dest = ctx.HttpContext.Request.Headers["Sec-Fetch-Dest"].ToString();
+        return dest.Length == 0 || dest.Equals("image", StringComparison.OrdinalIgnoreCase);
     }
 
     // Search results only live in the meta cache, never in the library.
