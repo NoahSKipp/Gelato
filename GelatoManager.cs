@@ -37,6 +37,14 @@ public sealed class GelatoManager(
     private const int MaxStaleDeletesPerSync = 50;
     public const string TreeSyncedTag = "gelato-tree-synced";
 
+    /// <summary>
+    /// Marks a movie or series as anime, so clients can keep anime out of
+    /// non-anime rows with one tag query instead of guessing.
+    /// </summary>
+    public const string AnimeTag = "anime";
+
+    private static readonly string[] AnimeProviders = ["AniDB", "Kitsu", "Mal", "Anilist"];
+
     /// <summary>Name of the file Gelato seeds into its library folders.</summary>
     public const string SeedFileName = "stub.txt";
 
@@ -1589,6 +1597,67 @@ public sealed class GelatoManager(
         return changed;
     }
 
+    /// <summary>
+    /// Anime: an id from an anime database (only anime addons use those), an
+    /// "Anime" genre, or animation produced in Japan.
+    /// </summary>
+    public static bool IsAnime(BaseItem item)
+    {
+        if (
+            item.ProviderIds is { } ids
+            && ids.Any(pair =>
+                !string.IsNullOrWhiteSpace(pair.Value)
+                && AnimeProviders.Contains(pair.Key, StringComparer.OrdinalIgnoreCase)
+            )
+        )
+            return true;
+
+        var genres = item.Genres ?? [];
+        if (genres.Contains("Anime", StringComparer.OrdinalIgnoreCase))
+            return true;
+
+        return genres.Contains("Animation", StringComparer.OrdinalIgnoreCase)
+            && (item.ProductionLocations ?? []).Any(location =>
+                location.Contains("Japan", StringComparison.OrdinalIgnoreCase)
+            );
+    }
+
+    /// <summary>
+    /// Tags every library movie and series that looks like anime but isn't
+    /// tagged yet: titles imported before the tag existed, and ones whose
+    /// tags a metadata refresh replaced.
+    /// </summary>
+    public int TagAnime(CancellationToken cancellationToken, IProgress<double>? progress = null)
+    {
+        var untagged = libraryManager
+            .GetItemList(
+                new InternalItemsQuery
+                {
+                    IncludeItemTypes = [BaseItemKind.Movie, BaseItemKind.Series],
+                    Recursive = true,
+                }
+            )
+            .Where(item =>
+                !(item.Tags?.Contains(AnimeTag, StringComparer.OrdinalIgnoreCase) ?? false)
+                && IsAnime(item)
+            )
+            .ToList();
+
+        const int chunkSize = 400;
+        for (var start = 0; start < untagged.Count; start += chunkSize)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var chunk = untagged.Skip(start).Take(chunkSize).ToList();
+            foreach (var item in chunk)
+                item.Tags = [.. item.Tags ?? [], AnimeTag];
+            persistence.SaveItems(chunk, cancellationToken);
+            progress?.Report(100.0 * Math.Min(start + chunkSize, untagged.Count) / untagged.Count);
+        }
+
+        _log.LogInformation("TagAnime: tagged {Count} titles as anime", untagged.Count);
+        return untagged.Count;
+    }
+
     public BaseItem? IntoBaseItem(StremioMeta meta)
     {
         BaseItem item;
@@ -1711,6 +1780,9 @@ public sealed class GelatoManager(
 
             var genres = (meta.Genres ?? meta.Genre) ?? [];
             item.Genres = genres.Where(g => !string.IsNullOrWhiteSpace(g)).ToArray();
+
+            if (IsAnime(item))
+                item.Tags = [.. item.Tags ?? [], AnimeTag];
         }
 
         if (item is Episode ep)
