@@ -1598,28 +1598,36 @@ public sealed class GelatoManager(
     }
 
     /// <summary>
-    /// Anime: an id from an anime database (only anime addons use those), an
-    /// "Anime" genre, or animation produced in Japan.
+    /// Anime: an id from an anime database (only anime addons use those)
+    /// unless the title is known to be made outside Japan, an "Anime" genre,
+    /// or animation made in Japan alone (co-productions like The Legend of
+    /// Korra or The Super Mario Bros. Movie list Japan among others).
     /// </summary>
     public static bool IsAnime(BaseItem item)
     {
+        var locations = (item.ProductionLocations ?? [])
+            .Where(location => !string.IsNullOrWhiteSpace(location))
+            .ToArray();
+        static bool IsJapan(string location) =>
+            location.Contains("Japan", StringComparison.OrdinalIgnoreCase);
+
+        var genres = item.Genres ?? [];
+        if (genres.Contains("Anime", StringComparer.OrdinalIgnoreCase))
+            return true;
+
         if (
             item.ProviderIds is { } ids
             && ids.Any(pair =>
                 !string.IsNullOrWhiteSpace(pair.Value)
                 && AnimeProviders.Contains(pair.Key, StringComparer.OrdinalIgnoreCase)
             )
+            && (locations.Length == 0 || locations.Any(IsJapan))
         )
             return true;
 
-        var genres = item.Genres ?? [];
-        if (genres.Contains("Anime", StringComparer.OrdinalIgnoreCase))
-            return true;
-
         return genres.Contains("Animation", StringComparer.OrdinalIgnoreCase)
-            && (item.ProductionLocations ?? []).Any(location =>
-                location.Contains("Japan", StringComparison.OrdinalIgnoreCase)
-            );
+            && locations.Length > 0
+            && locations.All(IsJapan);
     }
 
     /// <summary>
