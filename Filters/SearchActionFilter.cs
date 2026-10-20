@@ -126,7 +126,7 @@ public class SearchActionFilter(
 
         if (requestedTypes.Contains(BaseItemKind.Movie) && movieFolder is not null)
         {
-            tasks.Add(cfg.Stremio.SearchAsync(searchTerm, StremioMediaType.Movie));
+            tasks.Add(SearchAnyLanguageAsync(cfg.Stremio!, searchTerm, StremioMediaType.Movie));
         }
         else if (requestedTypes.Contains(BaseItemKind.Movie))
         {
@@ -137,7 +137,7 @@ public class SearchActionFilter(
 
         if (requestedTypes.Contains(BaseItemKind.Series) && seriesFolder is not null)
         {
-            tasks.Add(cfg.Stremio.SearchAsync(searchTerm, StremioMediaType.Series));
+            tasks.Add(SearchAnyLanguageAsync(cfg.Stremio!, searchTerm, StremioMediaType.Series));
         }
         else if (requestedTypes.Contains(BaseItemKind.Series))
         {
@@ -157,6 +157,39 @@ public class SearchActionFilter(
         }
 
         return results;
+    }
+
+    // The addon's search only knows one title per entry (usually English).
+    // A term in another language is also looked up on TMDB, and the titles
+    // it names are searched too; the term's own hits come first.
+    private static async Task<IReadOnlyList<StremioMeta>> SearchAnyLanguageAsync(
+        GelatoStremioProvider stremio,
+        string searchTerm,
+        StremioMediaType mediaType
+    )
+    {
+        var direct = stremio.SearchAsync(searchTerm, mediaType);
+        if (searchTerm.Trim().Length < 3)
+            return await direct;
+
+        var titles = await stremio.GetSearchTitlesAsync(searchTerm, mediaType);
+        var translated = titles
+            .Take(2)
+            .Select(title => stremio.SearchAsync(title, mediaType))
+            .ToList();
+
+        var merged = new List<StremioMeta>(await direct);
+        var seen = new HashSet<string>(merged.Select(m => m.Id), StringComparer.OrdinalIgnoreCase);
+        foreach (var batch in await Task.WhenAll(translated))
+        {
+            foreach (var meta in batch.Take(5))
+            {
+                if (seen.Add(meta.Id))
+                    merged.Add(meta);
+            }
+        }
+
+        return merged;
     }
 
     private List<BaseItemDto> ConvertMetasToDtos(List<StremioMeta> metas)

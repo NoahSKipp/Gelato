@@ -263,6 +263,70 @@ public class GelatoStremioProvider(
         }
     }
 
+    private static readonly TimeSpan SearchTitleCacheTtl = TimeSpan.FromMinutes(30);
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<
+        string,
+        (IReadOnlyList<string> Titles, DateTime Expiry)
+    > _searchTitleCache = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The English and original titles TMDB has for what a search term
+    /// names. TMDB matches translated and alternative titles, so a German
+    /// "Die Verurteilten" comes back as "The Shawshank Redemption", which
+    /// the addon's own search catalog can then find.
+    /// </summary>
+    public async Task<IReadOnlyList<string>> GetSearchTitlesAsync(
+        string query,
+        StremioMediaType mediaType,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var kind = mediaType == StremioMediaType.Movie ? "movie" : "tv";
+        var cacheKey = kind + ":" + query.Trim();
+        if (
+            _searchTitleCache.TryGetValue(cacheKey, out var cached)
+            && cached.Expiry > DateTime.UtcNow
+        )
+            return cached.Titles;
+
+        var url =
+            $"https://api.themoviedb.org/3/search/{kind}?query={Uri.EscapeDataString(query)}&language=en-US&include_adult=false&api_key={GetTmdbApiKey()}";
+        var titles = new List<string>();
+        try
+        {
+            using var client = http.CreateClient(nameof(GelatoStremioProvider));
+            client.Timeout = TimeSpan.FromSeconds(5);
+            var response = await client
+                .GetStringAsync(url, cancellationToken)
+                .ConfigureAwait(false);
+            var result = JsonSerializer.Deserialize<TmdbSearchResponse>(response, JsonOpts);
+            foreach (var hit in (result?.Results ?? []).Take(3))
+            {
+                foreach (
+                    var title in new[] { hit.Title ?? hit.Name, hit.OriginalTitle ?? hit.OriginalName }
+                )
+                {
+                    if (
+                        !string.IsNullOrWhiteSpace(title)
+                        && !string.Equals(title, query.Trim(), StringComparison.OrdinalIgnoreCase)
+                        && !titles.Contains(title, StringComparer.OrdinalIgnoreCase)
+                    )
+                        titles.Add(title);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            log.LogDebug(ex, "GetSearchTitles: TMDB lookup failed for {Query}", query);
+            return [];
+        }
+
+        if (_searchTitleCache.Count > 500)
+            _searchTitleCache.Clear();
+        _searchTitleCache[cacheKey] = (titles, DateTime.UtcNow + SearchTitleCacheTtl);
+        return titles;
+    }
+
     public async Task<List<StremioStream>> GetStreamsAsync(StremioUri uri)
     {
         return await GetStreamsAsync(uri.ExternalId, uri.MediaType);
@@ -761,6 +825,23 @@ public class StremioAppExtras
 
     [JsonPropertyName("releaseDates")]
     public TmdbReleaseDatesContainer? ReleaseDates { get; set; }
+}
+
+public class TmdbSearchResponse
+{
+    public List<TmdbSearchHit>? Results { get; set; }
+}
+
+public class TmdbSearchHit
+{
+    public string? Title { get; set; }
+    public string? Name { get; set; }
+
+    [JsonPropertyName("original_title")]
+    public string? OriginalTitle { get; set; }
+
+    [JsonPropertyName("original_name")]
+    public string? OriginalName { get; set; }
 }
 
 public class TmdbReleaseDatesContainer
