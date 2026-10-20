@@ -8,6 +8,14 @@
     "owner": "lstb1t",
     "versions": [
       {
+        "changelog": "## [0.26.22.0] - 2026-10-20\n\n### 🚀 Features\n\n- *(search)* Find titles by their name in any language\n",
+        "checksum": "62e1a250d20f27c51aaf4d9623563c9f",
+        "sourceUrl": "https://github.com/NoahSKipp/Gelato/releases/download/v0.26.22.0/gelato_0.26.22.0.zip",
+        "targetAbi": "12.0.0.0",
+        "timestamp": "2026-10-20T05:07:52Z",
+        "version": "0.26.22.0"
+      },
+      {
         "changelog": "## [0.26.21.0] - 2026-10-19\n\n### 🚀 Features\n\n- Tag anime movies and series so clients can filter them\n\n### 🐛 Bug Fixes\n\n- Stop tagging co-produced animation and non-Japanese titles as anime\n",
         "checksum": "4bb57ffadb0bee7d1828495193ab572c",
         "sourceUrl": "https://github.com/NoahSKipp/Gelato/releases/download/v0.26.21.0/gelato_0.26.21.0.zip",
