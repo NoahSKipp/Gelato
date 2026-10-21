@@ -305,8 +305,9 @@ public static class ActionContextExtensions
     public static string? GetActionName(this ActionExecutingContext ctx) =>
         (ctx.ActionDescriptor as ControllerActionDescriptor)?.ActionName;
 
-    public static string? GetActionName(this HttpContext ctx) =>
-        ctx.GetEndpoint()?.Metadata.GetMetadata<ControllerActionDescriptor>()?.ActionName;
+    // Null outside a request (background prefetch), which is no action.
+    public static string? GetActionName(this HttpContext? ctx) =>
+        ctx?.GetEndpoint()?.Metadata.GetMetadata<ControllerActionDescriptor>()?.ActionName;
 
     public static bool IsApiListing(this HttpContext ctx)
     {
@@ -343,14 +344,14 @@ public static class ActionContextExtensions
     public static bool IsApiSearchAction(this ActionExecutingContext ctx) =>
         ctx.GetActionName() is { } actionName && SearchActionNames.Contains(actionName);
 
-    public static bool IsInsertableAction(this HttpContext ctx)
+    public static bool IsInsertableAction(this HttpContext? ctx)
     {
         var actionName = ctx.GetActionName();
         return actionName != null
             && InsertableActionNames.Contains(actionName)
             && (
                 !InsertableListActionNames.Contains(actionName)
-                || InsertableListActionNames.Contains(actionName) && IsSingleItemList(ctx)
+                || InsertableListActionNames.Contains(actionName) && IsSingleItemList(ctx!)
             );
     }
 
