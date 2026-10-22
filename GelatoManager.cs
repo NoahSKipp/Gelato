@@ -305,6 +305,8 @@ public sealed class GelatoManager(
                     existing.Id,
                     existing.Name
                 );
+                if (allowRemoteRefresh)
+                    await RefreshReturningSeriesAsync(existing, meta, cfg, ct).ConfigureAwait(false);
                 return (existing, false);
             }
 
@@ -770,6 +772,48 @@ public sealed class GelatoManager(
         return item.IsGelato();
     }
 
+    private static SeriesStatus? ToSeriesStatus(StremioStatus? status) =>
+        status switch
+        {
+            StremioStatus.Continuing => SeriesStatus.Continuing,
+            StremioStatus.Ended => SeriesStatus.Ended,
+            StremioStatus.Upcoming => SeriesStatus.Unreleased,
+            _ => null,
+        };
+
+    /// <summary>
+    /// A series stored as not airing whose catalog entry says it is airing
+    /// again: its tree is synced now, which also updates the stored status.
+    /// </summary>
+    private async Task RefreshReturningSeriesAsync(
+        BaseItem existing,
+        StremioMeta meta,
+        PluginConfiguration cfg,
+        CancellationToken ct
+    )
+    {
+        if (
+            existing is not Series series
+            || series.Status == SeriesStatus.Continuing
+            || ToSeriesStatus(meta.GetStatus()) != SeriesStatus.Continuing
+            || cfg.Stremio is null
+        )
+            return;
+        try
+        {
+            var full = await cfg.Stremio.GetMetaAsync(series).ConfigureAwait(false);
+            if (full is not null)
+            {
+                _log.LogInformation("{Name} is airing again, syncing its seasons", series.Name);
+                await SyncSeriesTreesAsync(cfg, full, ct).ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Could not sync returning series {Name}", series.Name);
+        }
+    }
+
     public async Task<BaseItem?> SyncSeriesTreesAsync(
         PluginConfiguration cfg,
         StremioMeta seriesMeta,
@@ -837,6 +881,20 @@ public sealed class GelatoManager(
             else
             {
                 series = found;
+                var freshStatus = ToSeriesStatus(seriesMeta.GetStatus());
+                if (freshStatus is not null && series.Status != freshStatus)
+                {
+                    _log.LogInformation(
+                        "{Name}: status {Old} -> {New}",
+                        series.Name,
+                        series.Status,
+                        freshStatus
+                    );
+                    series.Status = freshStatus;
+                    await series
+                        .UpdateToRepositoryAsync(ItemUpdateType.MetadataEdit, ct)
+                        .ConfigureAwait(false);
+                }
             }
         }
 
@@ -1201,7 +1259,8 @@ public sealed class GelatoManager(
     public async Task SyncSeriesTrees(
         Guid userId,
         CancellationToken cancellationToken,
-        IProgress<double>? progress = null
+        IProgress<double>? progress = null,
+        bool includeEnded = false
     )
     {
         var cfg = GelatoPlugin.Instance!.GetConfig(userId);
@@ -1220,7 +1279,9 @@ public sealed class GelatoManager(
                 new InternalItemsQuery
                 {
                     IncludeItemTypes = [BaseItemKind.Series],
-                    SeriesStatuses = [SeriesStatus.Continuing],
+                    SeriesStatuses = includeEnded
+                        ? [SeriesStatus.Continuing, SeriesStatus.Ended]
+                        : [SeriesStatus.Continuing],
                     HasAnyProviderId = gelatoProviders,
                 }
             )
@@ -1808,13 +1869,7 @@ public sealed class GelatoManager(
 
         if (item is Series series)
         {
-            series.Status = meta.GetStatus() switch
-            {
-                StremioStatus.Continuing => SeriesStatus.Continuing,
-                StremioStatus.Ended => SeriesStatus.Ended,
-                StremioStatus.Upcoming => SeriesStatus.Unreleased,
-                _ => null,
-            };
+            series.Status = ToSeriesStatus(meta.GetStatus());
         }
 
         item.IsVirtualItem = false;
