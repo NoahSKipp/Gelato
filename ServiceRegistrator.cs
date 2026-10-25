@@ -35,6 +35,8 @@ public class ServiceRegistrator : IPluginServiceRegistrator
         services.AddSingleton<DeleteResourceFilter>();
         services.AddSingleton<DownloadFilter>();
         services.AddSingleton<ResumeItemsFilter>();
+        services.AddSingleton<ArtworkOnOpenFilter>();
+        services.AddSingleton<Gelato.Services.ArtworkBackfillService>();
         services.AddSingleton<GelatoManager>();
         services.DecorateSingle<IItemRepository, GelatoItemRepository>();
         services.AddSingleton(sp => (GelatoItemRepository)sp.GetRequiredService<IItemRepository>());
@@ -110,6 +112,7 @@ public class ServiceRegistrator : IPluginServiceRegistrator
             o.Filters.AddService<DeleteResourceFilter>();
             o.Filters.AddService<DownloadFilter>();
             o.Filters.AddService<ResumeItemsFilter>();
+            o.Filters.AddService<ArtworkOnOpenFilter>();
         });
     }
 

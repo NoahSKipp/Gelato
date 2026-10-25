@@ -270,6 +270,80 @@ public class GelatoStremioProvider(
     > _searchTitleCache = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
+    /// A backdrop and a logo from TMDB for a title the addon has no art for.
+    /// Backdrops without text come first, then the preferred language, then
+    /// English; logos the preferred language, then English, then any.
+    /// </summary>
+    public async Task<(string? Backdrop, string? Logo)> GetTmdbArtworkAsync(
+        string? tmdbId,
+        string? imdbId,
+        bool isMovie,
+        string? language,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var kind = isMovie ? "movie" : "tv";
+        var key = GetTmdbApiKey();
+        try
+        {
+            using var client = http.CreateClient(nameof(GelatoStremioProvider));
+            client.Timeout = TimeSpan.FromSeconds(8);
+            if (string.IsNullOrWhiteSpace(tmdbId) && !string.IsNullOrWhiteSpace(imdbId))
+            {
+                var found = JsonSerializer.Deserialize<TmdbFindResponse>(
+                    await client
+                        .GetStringAsync(
+                            $"https://api.themoviedb.org/3/find/{Uri.EscapeDataString(imdbId)}?external_source=imdb_id&api_key={key}",
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false),
+                    JsonOpts
+                );
+                tmdbId = (isMovie ? found?.MovieResults : found?.TvResults)?.FirstOrDefault()?.Id.ToString(
+                    System.Globalization.CultureInfo.InvariantCulture
+                );
+            }
+            if (string.IsNullOrWhiteSpace(tmdbId))
+                return (null, null);
+
+            var lang = string.IsNullOrWhiteSpace(language) ? "en" : language.Split('-')[0].ToLowerInvariant();
+            var images = JsonSerializer.Deserialize<TmdbImagesResponse>(
+                await client
+                    .GetStringAsync(
+                        $"https://api.themoviedb.org/3/{kind}/{Uri.EscapeDataString(tmdbId)}/images?include_image_language={lang},en,null&api_key={key}",
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false),
+                JsonOpts
+            );
+
+            static int Rank(string? code, params string?[] order)
+            {
+                var i = Array.IndexOf(order, code);
+                return i < 0 ? order.Length : i;
+            }
+
+            var backdrop = images
+                ?.Backdrops?.OrderBy(b => Rank(b.Iso639, null, lang, "en"))
+                .ThenByDescending(b => b.VoteAverage)
+                .FirstOrDefault()
+                ?.FilePath;
+            var logo = images
+                ?.Logos?.OrderBy(l => Rank(l.Iso639, lang, "en"))
+                .ThenByDescending(l => l.VoteAverage)
+                .FirstOrDefault()
+                ?.FilePath;
+            const string Base = "https://image.tmdb.org/t/p/original";
+            return (backdrop is null ? null : Base + backdrop, logo is null ? null : Base + logo);
+        }
+        catch (Exception ex)
+        {
+            log.LogDebug(ex, "GetTmdbArtwork: lookup failed for tmdb:{TmdbId} imdb:{ImdbId}", tmdbId, imdbId);
+            return (null, null);
+        }
+    }
+
+    /// <summary>
     /// The English and original titles TMDB has for what a search term
     /// names. TMDB matches translated and alternative titles, so a German
     /// "Die Verurteilten" comes back as "The Shawshank Redemption", which
@@ -825,6 +899,38 @@ public class StremioAppExtras
 
     [JsonPropertyName("releaseDates")]
     public TmdbReleaseDatesContainer? ReleaseDates { get; set; }
+}
+
+public class TmdbFindResponse
+{
+    [JsonPropertyName("movie_results")]
+    public List<TmdbIdHit>? MovieResults { get; set; }
+
+    [JsonPropertyName("tv_results")]
+    public List<TmdbIdHit>? TvResults { get; set; }
+}
+
+public class TmdbIdHit
+{
+    public int Id { get; set; }
+}
+
+public class TmdbImagesResponse
+{
+    public List<TmdbImage>? Backdrops { get; set; }
+    public List<TmdbImage>? Logos { get; set; }
+}
+
+public class TmdbImage
+{
+    [JsonPropertyName("file_path")]
+    public string? FilePath { get; set; }
+
+    [JsonPropertyName("iso_639_1")]
+    public string? Iso639 { get; set; }
+
+    [JsonPropertyName("vote_average")]
+    public double VoteAverage { get; set; }
 }
 
 public class TmdbSearchResponse
