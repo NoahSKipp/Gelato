@@ -8,6 +8,14 @@
     "owner": "lstb1t",
     "versions": [
       {
+        "changelog": "## [0.26.23.0] - 2026-10-25\n\n### 🚀 Features\n\n- *(artwork)* Backfill backdrops and logos for Gelato titles from the addon and TMDB\n",
+        "checksum": "736dd7d0c549406975cf94953043ae79",
+        "sourceUrl": "https://github.com/NoahSKipp/Gelato/releases/download/v0.26.23.0/gelato_0.26.23.0.zip",
+        "targetAbi": "12.0.0.0",
+        "timestamp": "2026-10-25T16:57:58Z",
+        "version": "0.26.23.0"
+      },
+      {
         "changelog": "Sync series trees now processes 2 series at a time instead of 4, reducing SQLite write-lock contention during the nightly sync.",
         "checksum": "5a5d4e32a8fba7d0791a5090a25c49b2",
         "sourceUrl": "https://github.com/NoahSKipp/Gelato/releases/download/v0.26.22.3/gelato_0.26.22.3.zip",
