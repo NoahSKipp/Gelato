@@ -1317,7 +1317,7 @@ public sealed class GelatoManager(
             continuingSeries,
             new ParallelOptions
             {
-                MaxDegreeOfParallelism = 4,
+                MaxDegreeOfParallelism = 2,
                 CancellationToken = cancellationToken,
             },
             async (series, ct) =>
