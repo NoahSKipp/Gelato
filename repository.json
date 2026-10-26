@@ -8,6 +8,14 @@
     "owner": "lstb1t",
     "versions": [
       {
+        "changelog": "## [0.26.23.2] - 2026-10-26\n\n### 🐛 Bug Fixes\n\n- *(streams)* Never hand ffmpeg an empty input for a Gelato stream\n",
+        "checksum": "90317610c90ddf468115e119b9133217",
+        "sourceUrl": "https://github.com/NoahSKipp/Gelato/releases/download/v0.26.23.2/gelato_0.26.23.2.zip",
+        "targetAbi": "12.0.0.0",
+        "timestamp": "2026-10-26T18:23:27Z",
+        "version": "0.26.23.2"
+      },
+      {
         "changelog": "## [0.26.23.1] - 2026-10-26\n\n### 🐛 Bug Fixes\n\n- *(media)* Skip trickplay and chapter image extraction for Gelato stubs\n\n### ⚡ Performance\n\n- *(streams)* Build only the needed media sources and serve stored streams while refreshing\n- *(db)* Write series trees and streams in small batches and skip unchanged stream rows\n",
         "checksum": "71f6f832a850f88d3c416372b80ebc59",
         "sourceUrl": "https://github.com/NoahSKipp/Gelato/releases/download/v0.26.23.1/gelato_0.26.23.1.zip",
