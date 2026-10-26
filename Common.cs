@@ -517,6 +517,21 @@ public static class BaseItemExtensions
             && !item.IsPrimaryVersion();
     }
 
+    public static Dictionary<string, JsonElement>? ReadGelatoData(this BaseItem item)
+    {
+        if (string.IsNullOrEmpty(item.ExternalId))
+            return null;
+
+        try
+        {
+            return JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(item.ExternalId);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     public static T? GelatoData<T>(this BaseItem item, string key)
     {
         if (string.IsNullOrEmpty(item.ExternalId))
