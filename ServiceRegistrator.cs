@@ -1,3 +1,5 @@
+using MediaBrowser.Controller.Chapters;
+using MediaBrowser.Controller.Trickplay;
 using Gelato.Config;
 using Gelato.Decorators;
 using Gelato.Filters;
@@ -92,7 +94,9 @@ public class ServiceRegistrator : IPluginServiceRegistrator
             .DecorateSingle<IPlaylistManager, PlaylistManagerDecorator>()
             .DecorateSingle<ISubtitleManager, SubtitleManagerDecorator>()
             .DecorateSingle<IProviderManager, ProviderManagerDecorator>()
-            .DecorateSingle<IImageProcessor, ImageProcessorDecorator>();
+            .DecorateSingle<IImageProcessor, ImageProcessorDecorator>()
+            .DecorateSingle<ITrickplayManager, TrickplayManagerDecorator>()
+            .DecorateSingle<IChapterManager, ChapterManagerDecorator>();
         // Expose the concrete decorator as Lazy so ImageProcessorDecorator can call SaveImageDirect
         // without introducing a circular dependency at construction time.
         services.AddSingleton(sp => new Lazy<ProviderManagerDecorator>(
