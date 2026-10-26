@@ -452,6 +452,51 @@ public sealed class GelatoManager(
         return FindByProviderIds(providerIds, kind, parent).FirstOrDefault();
     }
 
+    private static readonly SemaphoreSlim WriteGate = new(1, 1);
+
+    // Small batches with a pause in between, one writer at a time, so short
+    // writes (sessions, user data, Jellio state) get the lock between them.
+    public async Task SaveInBatchesAsync<T>(IReadOnlyList<T> items, CancellationToken ct)
+        where T : BaseItem
+    {
+        const int batchSize = 50;
+        for (var start = 0; start < items.Count; start += batchSize)
+        {
+            var batch = items.Skip(start).Take(batchSize).Cast<BaseItem>().ToList();
+            await WriteGate.WaitAsync(ct).ConfigureAwait(false);
+            try
+            {
+                persistence.SaveItems(batch, ct);
+            }
+            finally
+            {
+                WriteGate.Release();
+            }
+
+            if (start + batchSize < items.Count)
+            {
+                await Task.Delay(50, ct).ConfigureAwait(false);
+            }
+        }
+    }
+
+    private static string StreamRowState(BaseItem item) =>
+        string.Join(
+            '\u001f',
+            item.ExternalId,
+            item.Path,
+            item.Name,
+            item.ParentId,
+            item.RunTimeTicks,
+            item.PremiereDate?.Ticks,
+            item.IsVirtualItem,
+            string.Join(',', item.Tags ?? []),
+            string.Join(',', item.ProviderIds.OrderBy(p => p.Key).Select(p => p.Key + "=" + p.Value)),
+            (item as Video)?.PrimaryVersionId,
+            string.Join(',', item.LockedFields ?? []),
+            (item as Video)?.LinkedAlternateVersions?.Length ?? 0
+        );
+
     /// <summary>
     /// Load streams and inserts them into the database keeping original
     /// sorting. We make sure to keep a one stable version based on primaryversionid
@@ -597,6 +642,7 @@ public sealed class GelatoManager(
         }
 
         var upsertedStreams = new List<Video>();
+        var changedStreams = new List<Video>();
 
         for (var i = 0; i < acceptable.Count; i++)
         {
@@ -614,6 +660,7 @@ public sealed class GelatoManager(
 
             var streamGuid = s.GetGuid();
             var isNewStreamItem = !existingByGuid.TryGetValue(streamGuid, out var streamItem);
+            var before = isNewStreamItem ? null : StreamRowState(streamItem!);
 
             if (isNewStreamItem)
             {
@@ -684,10 +731,15 @@ public sealed class GelatoManager(
             existingByGuid[streamGuid] = streamItem;
 
             upsertedStreams.Add(streamItem);
+            if (before is null || before != StreamRowState(streamItem))
+            {
+                changedStreams.Add(streamItem);
+            }
         }
 
-        //upsertedStreams = SaveItems(upsertedStreams, (Folder)primary.GetParent()).Cast<Video>().ToList();
-        persistence.SaveItems(upsertedStreams, ct);
+        // Unchanged rows are not rewritten: a resync of a 60 stream title used
+        // to update every row and hold the write lock for all of them.
+        await SaveInBatchesAsync(changedStreams, ct).ConfigureAwait(false);
 
         var newIds = new HashSet<Guid>(upsertedStreams.Select(x => x.Id));
         var stale = existingByGuid
@@ -713,7 +765,7 @@ public sealed class GelatoManager(
         // orphans' delete was commented out, so the removal never reached the
         // database: a stale row kept this user and stayed in the stream list
         // for good. Saving all of them hides them from the list right away.
-        persistence.SaveItems(stale, ct);
+        await SaveInBatchesAsync(stale, ct).ConfigureAwait(false);
 
         // Then drop orphans, a bounded batch per sync so a title with a large
         // backlog doesn't stall the sync the reader is waiting on.
@@ -745,7 +797,7 @@ public sealed class GelatoManager(
         stopwatch.Stop();
 
         _log.LogInformation(
-            $"SyncStreams finished GelatoId={uri.ExternalId} userId={userId} duration={Math.Round(stopwatch.Elapsed.TotalSeconds, 1)}s streams={upsertedStreams.Count}"
+            $"SyncStreams finished GelatoId={uri.ExternalId} userId={userId} duration={Math.Round(stopwatch.Elapsed.TotalSeconds, 1)}s streams={upsertedStreams.Count} written={changedStreams.Count + stale.Count}"
         );
 
         return acceptable.Count;
@@ -1099,14 +1151,9 @@ public sealed class GelatoManager(
             }
         }
 
-        if (newSeasons.Count > 0)
-            persistence.SaveItems(newSeasons, ct);
-
-        if (allNewEpisodes.Count > 0)
-            persistence.SaveItems(allNewEpisodes, ct);
-
-        if (updatedEpisodes.Count > 0)
-            persistence.SaveItems(updatedEpisodes, ct);
+        await SaveInBatchesAsync(newSeasons, ct).ConfigureAwait(false);
+        await SaveInBatchesAsync(allNewEpisodes, ct).ConfigureAwait(false);
+        await SaveInBatchesAsync(updatedEpisodes, ct).ConfigureAwait(false);
 
         stopwatch.Stop();
 
