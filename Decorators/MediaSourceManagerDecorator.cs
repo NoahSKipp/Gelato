@@ -573,6 +573,10 @@ public sealed class MediaSourceManagerDecorator(
             selected.IsRemote = false;
             selected.Protocol = MediaProtocol.File;
         }
+        else
+        {
+            EnsureStreamInput(selected, owner, item, ctx);
+        }
 
         return [selected];
 
@@ -582,6 +586,51 @@ public sealed class MediaSourceManagerDecorator(
 
         BaseItem ResolveOwnerFor(MediaSourceInfo s, BaseItem fallback) =>
             Guid.TryParse(s.ETag, out var g) ? libraryManager.GetItemById(g) ?? fallback : fallback;
+    }
+
+    // The stream and HLS routes hand this source straight to ffmpeg as its
+    // input. An empty path there became `-i ""` and ffmpeg exit 254 on every
+    // remux and transcode, so it is flagged and taken from the stored stream
+    // row again. The URL itself is never logged.
+    private void EnsureStreamInput(MediaSourceInfo selected, BaseItem owner, BaseItem item, HttpContext? ctx)
+    {
+        var route = ctx?.Request.Path.Value ?? "";
+        if (!string.IsNullOrWhiteSpace(selected.Path) && selected.Path != "/stub")
+        {
+            _log.LogDebug(
+                "Stream input ready for {ItemId} source {SourceId}: protocol={Protocol} route={Route}",
+                item.Id,
+                selected.Id,
+                selected.Protocol,
+                route
+            );
+            return;
+        }
+
+        var video = owner as Video;
+        _log.LogError(
+            "Empty stream input for {ItemId} source {SourceId} owner {OwnerId} on {Route}: path={PathState} shortcut={IsShortcut} shortcutPathSet={ShortcutPathSet} protocol={Protocol}",
+            item.Id,
+            selected.Id,
+            owner.Id,
+            route,
+            selected.Path is null ? "null" : selected.Path.Length == 0 ? "empty" : "stub",
+            video?.IsShortcut,
+            !string.IsNullOrEmpty(video?.ShortcutPath),
+            selected.Protocol
+        );
+
+        var stored = repo.RetrieveItem(owner.Id)?.Path;
+        if (string.IsNullOrWhiteSpace(stored) || !stored.Contains("://", StringComparison.Ordinal) || stored.StartsWith("gelato", StringComparison.OrdinalIgnoreCase))
+        {
+            _log.LogError("No stored stream address for {OwnerId}; ffmpeg would get no input", owner.Id);
+            return;
+        }
+
+        selected.Path = stored;
+        selected.Protocol = MediaProtocol.Http;
+        selected.IsRemote = true;
+        _log.LogWarning("Stream input for {ItemId} source {SourceId} restored from the stored stream row", item.Id, selected.Id);
     }
 
     private static bool IsGelatoPlaybackItem(BaseItem item) =>
@@ -740,7 +789,9 @@ public sealed class MediaSourceManagerDecorator(
             info.Timestamp = video.Timestamp;
             info.IsRemote = true;
 
-            if (video.IsShortcut)
+            // Only while a probe has the row pointed at a temporary .strm;
+            // never trade the stream address for an unset shortcut path.
+            if (video.IsShortcut && !string.IsNullOrEmpty(video.ShortcutPath))
             {
                 info.IsRemote = true;
                 info.Path = video.ShortcutPath;
@@ -895,13 +946,15 @@ public sealed class MediaSourceManagerDecorator(
 
         var origPath = owner.Path;
         var origShortcut = owner.IsShortcut;
+        var origShortcutPath = owner.ShortcutPath;
         owner.Path = tmpStrm;
         owner.IsShortcut = true;
         owner.DateModified = new FileInfo(tmpStrm).LastWriteTimeUtc;
 
         try
         {
-            _log.LogInformation("Probing stream for {Id} via {Url}", owner.Id, streamUrl);
+            // The stream address carries debrid and proxy credentials: never logged.
+            _log.LogInformation("Probing stream for {Id}", owner.Id);
 
             var options = new MetadataRefreshOptions(directoryService)
             {
@@ -948,6 +1001,7 @@ public sealed class MediaSourceManagerDecorator(
         {
             owner.Path = origPath;
             owner.IsShortcut = origShortcut;
+            owner.ShortcutPath = origShortcutPath;
             try
             {
                 File.Delete(tmpStrm);
