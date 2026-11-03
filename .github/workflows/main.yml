@@ -20,6 +20,20 @@ jobs:
           workspace: Gelato.sln
           implicit-restore: true
   
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Unit tests
+        run: dotnet test tests/Gelato.Tests
+
   conventional-commits:
     runs-on: ubuntu-latest
     steps:
