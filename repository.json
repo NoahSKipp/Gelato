@@ -9,7 +9,7 @@
     "versions": [
       {
         "changelog": "## [0.26.24.1] - 2026-11-03\n\n### 🐛 Bug Fixes\n\n- *(playback)* Stop Play racing a warm-up probe into a source with no streams\n\n### 🧪 Testing\n\n- Script that checks Play right after a warm-up on a real server\n",
-        "checksum": "24c3d0d2fe4ada1f10bb598d48d6b9b8",
+        "checksum": "a62376c3e2210834caed4bbe9da98c96",
         "sourceUrl": "https://github.com/NoahSKipp/Gelato/releases/download/v0.26.24.1/gelato_0.26.24.1.zip",
         "targetAbi": "12.0.0.0",
         "timestamp": "2026-11-03T20:24:35Z",
