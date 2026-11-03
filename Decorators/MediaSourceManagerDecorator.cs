@@ -49,7 +49,8 @@ public sealed class MediaSourceManagerDecorator(
     Lazy<SubtitleProvider> subtitleProvider,
     IMediaSegmentManager mediaSegmentManager,
     IEnumerable<ICustomMetadataProvider<Video>> videoProbeProviders,
-    BadStreamStore badStreams
+    BadStreamStore badStreams,
+    WarmTracker warm
 ) : IMediaSourceManager
 {
     private readonly IMediaSourceManager _inner =
@@ -79,6 +80,7 @@ public sealed class MediaSourceManagerDecorator(
     // Sources probed in one Play before giving up on finding a real stream.
     private const int MaxPlaceholderCandidates = 3;
     private readonly BadStreamStore _badStreams = badStreams;
+    private readonly WarmTracker _warm = warm;
     private static readonly TimeSpan StreamInfoTtl = TimeSpan.FromMinutes(5);
 
     private readonly ConcurrentDictionary<
@@ -573,6 +575,7 @@ public sealed class MediaSourceManagerDecorator(
 
             var sourceId = owner.Id.ToString("N", CultureInfo.InvariantCulture);
             _badStreams.MarkBad(sourceId);
+            _warm.MarkCold(sourceId);
             rejected.Add(sourceId);
             _log.LogWarning(
                 "Placeholder clip for {ItemId} source {SourceId}: probed {Probed}s, expected {Expected}s, {Reason}",
@@ -593,6 +596,18 @@ public sealed class MediaSourceManagerDecorator(
                 break;
             selected = next;
             owner = nextOwner;
+        }
+
+        if (
+            !placeholder
+            && owner.Id != item.Id
+            && (selected.MediaStreams?.Any(ms => ms.Type == MediaStreamType.Video) ?? false)
+        )
+        {
+            _warm.MarkWarm(
+                owner.Id.ToString("N", CultureInfo.InvariantCulture),
+                owner.GelatoData<string>("filename")
+            );
         }
 
         if (!placeholder && item.RunTimeTicks is null && selected.RunTimeTicks is not null)
@@ -661,6 +676,34 @@ public sealed class MediaSourceManagerDecorator(
 
         BaseItem ResolveOwnerFor(MediaSourceInfo s, BaseItem fallback) =>
             Guid.TryParse(s.ETag, out var g) ? libraryManager.GetItemById(g) ?? fallback : fallback;
+    }
+
+    public sealed record SourceRow(string ClientId, string RowId, string Tier);
+
+    // The sources of a title in listing order, under the ids clients are
+    // given (the first one under the title's own id), without building them.
+    public IReadOnlyList<SourceRow> ListSourceRows(BaseItem item, User user)
+    {
+        var slots = ResolveSlots(item, false, user, out _);
+        if (slots is null)
+            return [];
+        return slots
+            .Select(
+                (slot, index) =>
+                    new SourceRow(
+                        index == 0 ? item.Id.ToString("N", CultureInfo.InvariantCulture) : slot.Id,
+                        slot.Stream?.Id.ToString("N", CultureInfo.InvariantCulture) ?? slot.Id,
+                        QualityTier.Of(
+                            slot.Stream?.Height is > 0 ? slot.Stream.Height : null,
+                            null,
+                            Read<string>(slot.Data, "name"),
+                            Read<string>(slot.Data, "description"),
+                            Read<string>(slot.Data, "filename"),
+                            slot.Info?.Name
+                        )
+                    )
+            )
+            .ToList();
     }
 
     // The title's own runtime, else the one AIOStreams printed in the label.

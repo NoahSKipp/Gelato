@@ -41,6 +41,9 @@ public class ServiceRegistrator : IPluginServiceRegistrator
         services.AddSingleton<Gelato.Services.ArtworkBackfillService>();
         services.AddSingleton<GelatoManager>();
         services.AddSingleton<BadStreamStore>();
+        services.AddSingleton<WarmTracker>();
+        services.AddSingleton<NzbdavPresence>();
+        services.AddSingleton<WarmupGate>();
         services.DecorateSingle<IItemRepository, GelatoItemRepository>();
         services.AddSingleton(sp => (GelatoItemRepository)sp.GetRequiredService<IItemRepository>());
         services.AddSingleton<GelatoStremioProviderFactory>();

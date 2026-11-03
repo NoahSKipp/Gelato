@@ -28,6 +28,13 @@ public class PluginConfiguration : BasePluginConfiguration
     public bool DisableSearch { get; set; } = false;
     public bool EnableJavaScriptInjection { get; set; } = false;
     public bool LazyImages { get; set; } = false;
+
+    // Optional nzbdav WebDAV access, only to check that a warm release is
+    // still imported. Left blank, that check is skipped.
+    public string NzbdavUrl { get; set; } = "";
+    public string NzbdavUser { get; set; } = "";
+    public string NzbdavPassword { get; set; } = "";
+    public string NzbdavContentPath { get; set; } = "/content";
     public List<CatalogConfig> Catalogs { get; set; } = [];
     public List<UserConfig> UserConfigs { get; set; } = [];
 

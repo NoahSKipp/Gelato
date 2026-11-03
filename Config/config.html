@@ -188,6 +188,26 @@
               <div class="fieldDescription">Default: <code>40M</code>.</div>
             </div>
 
+            <h3 class="sectionTitle">nzbdav (optional)</h3>
+            <div class="inputContainer">
+              <label class="inputLabel inputLabelUnfocused" for="txtNzbdavUrl">nzbdav WebDAV address:</label>
+              <input is="emby-input" type="text" id="txtNzbdavUrl" class="emby-input" />
+              <div class="fieldDescription">Only used to check that a warmed release is still imported. Leave blank to skip that check.</div>
+            </div>
+            <div class="inputContainer">
+              <label class="inputLabel inputLabelUnfocused" for="txtNzbdavUser">nzbdav WebDAV user:</label>
+              <input is="emby-input" type="text" id="txtNzbdavUser" class="emby-input" />
+            </div>
+            <div class="inputContainer">
+              <label class="inputLabel inputLabelUnfocused" for="txtNzbdavPassword">nzbdav WebDAV password:</label>
+              <input is="emby-input" type="password" id="txtNzbdavPassword" class="emby-input" />
+            </div>
+            <div class="inputContainer">
+              <label class="inputLabel inputLabelUnfocused" for="txtNzbdavContentPath">nzbdav content folder:</label>
+              <input is="emby-input" type="text" id="txtNzbdavContentPath" class="emby-input" />
+              <div class="fieldDescription">Default: <code>/content</code>.</div>
+            </div>
+
             <div class="inputContainer">
               <label class="inputLabel inputLabelUnfocused" for="txtStreamTTL">Stream TTL (seconds):</label>
               <input is="emby-input" type="number" id="txtStreamTTL" class="emby-input" />
@@ -307,6 +327,10 @@
         const txtBufferDays = page.querySelector('#txtBufferDays');
         const txtFFmpegAnalyzeDuration = page.querySelector('#txtFFmpegAnalyzeDuration');
         const txtFFmpegProbeSize = page.querySelector('#txtFFmpegProbeSize');
+        const txtNzbdavUrl = page.querySelector('#txtNzbdavUrl');
+        const txtNzbdavUser = page.querySelector('#txtNzbdavUser');
+        const txtNzbdavPassword = page.querySelector('#txtNzbdavPassword');
+        const txtNzbdavContentPath = page.querySelector('#txtNzbdavContentPath');
         const chkEnableJavaScriptInjection = page.querySelector('#chkEnableJavaScriptInjection');
         const chkLazyImages = page.querySelector('#chkLazyImages');
 
@@ -655,6 +679,10 @@
             if (txtBufferDays) txtBufferDays.value = cfg.FilterUnreleasedBufferDays ?? 0;
             if (txtFFmpegAnalyzeDuration) txtFFmpegAnalyzeDuration.value = cfg.FFmpegAnalyzeDuration || "5M";
             if (txtFFmpegProbeSize) txtFFmpegProbeSize.value = cfg.FFmpegProbeSize || "25M";
+            if (txtNzbdavUrl) txtNzbdavUrl.value = cfg.NzbdavUrl || "";
+            if (txtNzbdavUser) txtNzbdavUser.value = cfg.NzbdavUser || "";
+            if (txtNzbdavPassword) txtNzbdavPassword.value = cfg.NzbdavPassword || "";
+            if (txtNzbdavContentPath) txtNzbdavContentPath.value = cfg.NzbdavContentPath || "/content";
             if (chkEnableJavaScriptInjection) chkEnableJavaScriptInjection.checked = cfg.EnableJavaScriptInjection || false;
             if (chkLazyImages) chkLazyImages.checked = cfg.LazyImages ?? false;
 
@@ -690,6 +718,10 @@
 
             cfg.FFmpegAnalyzeDuration = txtFFmpegAnalyzeDuration.value;
             cfg.FFmpegProbeSize = txtFFmpegProbeSize.value;
+            if (txtNzbdavUrl) cfg.NzbdavUrl = txtNzbdavUrl.value.trim();
+            if (txtNzbdavUser) cfg.NzbdavUser = txtNzbdavUser.value.trim();
+            if (txtNzbdavPassword) cfg.NzbdavPassword = txtNzbdavPassword.value;
+            if (txtNzbdavContentPath) cfg.NzbdavContentPath = txtNzbdavContentPath.value.trim() || "/content";
             cfg.EnableJavaScriptInjection = chkEnableJavaScriptInjection.checked;
             cfg.LazyImages = chkLazyImages.checked;
 
