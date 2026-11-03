@@ -1,5 +1,7 @@
 using System.Reflection;
+using Gelato.Services;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Controllers;
 using Microsoft.AspNetCore.Mvc.Filters;
 
@@ -24,23 +26,41 @@ public sealed class PlaybackInfoFilter : IAsyncActionFilter, IOrderedFilter
         if (ctx.ActionDescriptor is ControllerActionDescriptor cad)
             ctx.HttpContext.Items["actionName"] = cad.ActionName;
 
-        if (ctx.HttpContext.Items.ContainsKey(ItemsKey))
+        if (!ctx.HttpContext.Items.ContainsKey(ItemsKey))
         {
-            await next();
-            return;
+            if (
+                TryFromArgs(ctx.ActionArguments, out var id)
+                || TryFromRoute(ctx, out id)
+                || TryFromQuery(ctx.HttpContext.Request, out id)
+            )
+            {
+                if (!string.IsNullOrWhiteSpace(id))
+                    ctx.HttpContext.Items[ItemsKey] = id;
+            }
         }
 
-        if (
-            TryFromArgs(ctx.ActionArguments, out var id)
-            || TryFromRoute(ctx, out id)
-            || TryFromQuery(ctx.HttpContext.Request, out id)
-        )
-        {
-            if (!string.IsNullOrWhiteSpace(id))
-                ctx.HttpContext.Items[ItemsKey] = id;
-        }
+        var executed = await next();
+        HandleProbeUnavailable(executed);
+    }
 
-        await next();
+    // No playable source yet (its probe failed or is still running): 503 with
+    // Retry-After so the client asks again instead of starting a stream that
+    // would fail.
+    public static bool HandleProbeUnavailable(ActionExecutedContext executed)
+    {
+        var ex = executed.Exception;
+        while (ex is not null and not ProbeUnavailableException)
+            ex = ex.InnerException;
+        if (ex is not ProbeUnavailableException unavailable || executed.ExceptionHandled)
+            return false;
+        executed.HttpContext.Response.Headers["Retry-After"] =
+            ProbeUnavailableException.RetryAfterSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        executed.Result = new ObjectResult(new { Error = "source_not_ready", Reason = unavailable.Message })
+        {
+            StatusCode = StatusCodes.Status503ServiceUnavailable,
+        };
+        executed.ExceptionHandled = true;
+        return true;
     }
 
     private static bool TryFromArgs(IDictionary<string, object?> args, out string? id)

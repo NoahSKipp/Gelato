@@ -50,7 +50,8 @@ public sealed class MediaSourceManagerDecorator(
     IMediaSegmentManager mediaSegmentManager,
     IEnumerable<ICustomMetadataProvider<Video>> videoProbeProviders,
     BadStreamStore badStreams,
-    WarmTracker warm
+    WarmTracker warm,
+    ProbeGate probeGate
 ) : IMediaSourceManager
 {
     private readonly IMediaSourceManager _inner =
@@ -81,6 +82,7 @@ public sealed class MediaSourceManagerDecorator(
     private const int MaxPlaceholderCandidates = 3;
     private readonly BadStreamStore _badStreams = badStreams;
     private readonly WarmTracker _warm = warm;
+    private readonly ProbeGate _probeGate = probeGate;
     private static readonly TimeSpan StreamInfoTtl = TimeSpan.FromMinutes(5);
 
     private readonly ConcurrentDictionary<
@@ -544,28 +546,37 @@ public sealed class MediaSourceManagerDecorator(
         {
             if (NeedsProbe(selected))
             {
-                var libraryOptions = _libraryManager.GetLibraryOptions(owner);
-
-                var segmentTask = _mediaSegmentManager.RunSegmentPluginProviders(
-                    owner,
-                    libraryOptions,
-                    false,
-                    ct
-                );
-                var metadataTask = ProbeStreamAsync((Video)owner, selected.Path, ct);
-                //  var subtitleTask = DownloadSubtitles((Video)owner, ct);
-
-                await Task.WhenAll(metadataTask, segmentTask).ConfigureAwait(false);
-
-                await owner
-                    .UpdateToRepositoryAsync(ItemUpdateType.MetadataEdit, ct)
-                    .ConfigureAwait(false);
-
-                _streamInfo.TryRemove(owner.Id, out _);
+                var probeOwner = owner;
+                var probePath = selected.Path;
                 var probedId = owner.Id == item.Id ? mediaSourceId : owner.Id;
-                selected =
-                    GetStaticMediaSource(item, enablePathSubstitution, user, probedId, rejected)
-                    ?? selected;
+                var started = Stopwatch.StartNew();
+                try
+                {
+                    // Shared with a warm-up or another Play of this row; none
+                    // of them may cancel it for the others.
+                    selected = await _probeGate
+                        .EnsureProbedAsync(
+                            probeOwner.Id,
+                            selected,
+                            NeedsProbe,
+                            () => ProbeAndSaveAsync(probeOwner, probePath),
+                            () => GetStaticMediaSource(item, enablePathSubstitution, user, probedId, rejected),
+                            ProbeGate.MaxWait,
+                            ct
+                        )
+                        .ConfigureAwait(false);
+                }
+                catch (ProbeUnavailableException ex)
+                {
+                    _log.LogWarning(
+                        "No playable source for {ItemId} source {SourceId} after {Ms} ms: {Reason}",
+                        item.Id,
+                        probeOwner.Id.ToString("N", CultureInfo.InvariantCulture),
+                        started.ElapsedMilliseconds,
+                        ex.Message
+                    );
+                    throw;
+                }
             }
 
             var reason = FingerprintOf(selected, expectedSeconds);
@@ -1062,14 +1073,34 @@ public sealed class MediaSourceManagerDecorator(
         return streams;
     }
 
-    private async Task ProbeStreamAsync(Video owner, string streamUrl, CancellationToken ct)
+    // Only ever run through _probeGate, so the item is changed and restored
+    // by one probe at a time.
+    private async Task<bool> ProbeAndSaveAsync(BaseItem owner, string streamUrl)
+    {
+        var libraryOptions = _libraryManager.GetLibraryOptions(owner);
+        var segmentTask = _mediaSegmentManager.RunSegmentPluginProviders(
+            owner,
+            libraryOptions,
+            false,
+            CancellationToken.None
+        );
+        var metadataTask = ProbeStreamAsync((Video)owner, streamUrl, CancellationToken.None);
+        await Task.WhenAll(metadataTask, segmentTask).ConfigureAwait(false);
+
+        await owner
+            .UpdateToRepositoryAsync(ItemUpdateType.MetadataEdit, CancellationToken.None)
+            .ConfigureAwait(false);
+        _streamInfo.TryRemove(owner.Id, out _);
+        return metadataTask.Result;
+    }
+
+    private async Task<bool> ProbeStreamAsync(Video owner, string streamUrl, CancellationToken ct)
     {
         var gelatoFilename = owner.GelatoData<string>("filename");
         var strmBaseName = !string.IsNullOrEmpty(gelatoFilename)
             ? Path.GetFileNameWithoutExtension(gelatoFilename)
             : $"{owner.Id:N}";
-        var tmpStrm = Path.Combine(Path.GetTempPath(), $"{strmBaseName}.strm");
-        await File.WriteAllTextAsync(tmpStrm, streamUrl, ct).ConfigureAwait(false);
+        var tmpStrm = ProbeTempFile.Create(strmBaseName, streamUrl);
 
         var origPath = owner.Path;
         var origShortcut = owner.IsShortcut;
@@ -1119,23 +1150,19 @@ public sealed class MediaSourceManagerDecorator(
                 _log.LogDebug("No probe provider available, falling back to RefreshMetadata");
                 await owner.RefreshMetadata(options, ct).ConfigureAwait(false);
             }
+            return true;
         }
         catch (Exception ex)
         {
             _log.LogError(ex, "Stream probe failed for {Id}", owner.Id);
+            return false;
         }
         finally
         {
             owner.Path = origPath;
             owner.IsShortcut = origShortcut;
             owner.ShortcutPath = origShortcutPath;
-            try
-            {
-                File.Delete(tmpStrm);
-            }
-            catch
-            { /* best effort */
-            }
+            ProbeTempFile.Delete(tmpStrm);
         }
     }
 }
