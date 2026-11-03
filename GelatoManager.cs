@@ -44,6 +44,8 @@ public sealed class GelatoManager(
     private readonly JsonFileStore<DateTime> _streamSyncs = new(() =>
         Path.Combine(GelatoPlugin.Instance!.DataFolderPath, "stream-sync.json")
     );
+
+    private readonly ConcurrentDictionary<string, Lazy<Task<int>>> _syncsInFlight = new();
     public const string TreeSyncedTag = "gelato-tree-synced";
 
     /// <summary>
@@ -514,7 +516,38 @@ public sealed class GelatoManager(
     /// sorting. We make sure to keep a one stable version based on primaryversionid
     /// </summary>
     /// <returns></returns>
-    public async Task<int> SyncStreams(BaseItem item, Guid userId, CancellationToken ct)
+    // One sync per user and title at a time, whoever asks (Play, the detail
+    // page, a prefetch): parallel syncs of one title each inserted rows and
+    // fought over SQLite's write lock.
+    public Task<int> SyncStreams(BaseItem item, Guid userId, CancellationToken ct)
+    {
+        var key = $"{userId:N}:{item.Id:N}";
+        var lazy = _syncsInFlight.GetOrAdd(
+            key,
+            _ => new Lazy<Task<int>>(
+                () => RunSyncStreams(key, item, userId),
+                LazyThreadSafetyMode.ExecutionAndPublication
+            )
+        );
+        return lazy.Value;
+    }
+
+    private async Task<int> RunSyncStreams(string key, BaseItem item, Guid userId)
+    {
+        try
+        {
+            // Not the first caller's token: one aborted request must not
+            // leave a half-written stream list for the others.
+            return await SyncStreamsCore(item, userId, CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            _syncsInFlight.TryRemove(key, out _);
+        }
+    }
+
+    private async Task<int> SyncStreamsCore(BaseItem item, Guid userId, CancellationToken ct)
     {
         _log.LogDebug($"SyncStreams for {item.Id}");
         var stopwatch = Stopwatch.StartNew();
@@ -653,6 +686,21 @@ public sealed class GelatoManager(
             }
         }
 
+        // Rows saved before the stream guid was made stable (or by an older
+        // label scheme) miss on guid; a release whose filename is unique
+        // among them keeps its row instead of a new insert plus a delete.
+        var currentGuids = acceptable.Select(s => s!.GetGuid()).ToHashSet();
+        var adoptable = existingStreamItems
+            .Where(v =>
+                v.GelatoData<Guid?>("guid") is not { } g || !currentGuids.Contains(g)
+            )
+            .Select(v => (Item: v, Filename: v.GelatoData<string>("filename")))
+            .Where(x => !string.IsNullOrEmpty(x.Filename))
+            .GroupBy(x => x.Filename!, StringComparer.OrdinalIgnoreCase)
+            .Where(g => g.Count() == 1)
+            .ToDictionary(g => g.Key, g => g.First().Item, StringComparer.OrdinalIgnoreCase);
+        var adopted = 0;
+
         var upsertedStreams = new List<Video>();
         var changedStreams = new List<Video>();
 
@@ -672,6 +720,16 @@ public sealed class GelatoManager(
 
             var streamGuid = s.GetGuid();
             var isNewStreamItem = !existingByGuid.TryGetValue(streamGuid, out var streamItem);
+            if (
+                isNewStreamItem
+                && s.BehaviorHints?.Filename is { Length: > 0 } adoptName
+                && adoptable.Remove(adoptName, out var adoptRow)
+            )
+            {
+                streamItem = adoptRow;
+                isNewStreamItem = false;
+                adopted++;
+            }
             var before = isNewStreamItem ? null : StreamRowState(streamItem!);
 
             if (isNewStreamItem)
@@ -809,7 +867,7 @@ public sealed class GelatoManager(
         stopwatch.Stop();
 
         _log.LogInformation(
-            $"SyncStreams finished GelatoId={uri.ExternalId} userId={userId} duration={Math.Round(stopwatch.Elapsed.TotalSeconds, 1)}s streams={upsertedStreams.Count} written={changedStreams.Count + stale.Count}"
+            $"SyncStreams finished GelatoId={uri.ExternalId} userId={userId} duration={Math.Round(stopwatch.Elapsed.TotalSeconds, 1)}s streams={upsertedStreams.Count - 1} written={changedStreams.Count + stale.Count} adopted={adopted} deleted={Math.Min(toDelete.Count, MaxStaleDeletesPerSync)}"
         );
 
         return acceptable.Count;
