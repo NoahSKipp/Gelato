@@ -1,7 +1,9 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using Gelato.Config;
 using Gelato.Decorators;
+using Gelato.Services;
 using Jellyfin.Data.Enums;
 using Jellyfin.Database.Implementations.Entities;
 using MediaBrowser.Common.Configuration;
@@ -35,6 +37,13 @@ public sealed class GelatoManager(
 {
     public const string StreamTag = "gelato-stream";
     private const int MaxStaleDeletesPerSync = 50;
+
+    // When each title's stream list was last synced, per user. Kept on disk
+    // so a restart doesn't turn every title cold again; the rows themselves
+    // are already in the database.
+    private readonly JsonFileStore<DateTime> _streamSyncs = new(() =>
+        Path.Combine(GelatoPlugin.Instance!.DataFolderPath, "stream-sync.json")
+    );
     public const string TreeSyncedTag = "gelato-tree-synced";
 
     /// <summary>
@@ -73,19 +82,22 @@ public sealed class GelatoManager(
         return memoryCache.Get<List<StremioSubtitle>>($"subs:{guid}");
     }
 
+    private static TimeSpan StreamTtl =>
+        TimeSpan.FromSeconds(GelatoPlugin.Instance!.Configuration.StreamTTL);
+
     public void SetStreamSync(string guid)
     {
-        memoryCache.Set(
-            $"streamsync:{guid}",
-            guid,
-            TimeSpan.FromSeconds(GelatoPlugin.Instance!.Configuration.StreamTTL)
-        );
+        var now = DateTime.UtcNow;
+        var ttl = StreamTtl;
+        _streamSyncs.RemoveWhere((_, at) => now - at > ttl);
+        _streamSyncs.Set(guid, now);
     }
 
-    public bool HasStreamSync(string guid)
-    {
-        return memoryCache.TryGetValue($"streamsync:{guid}", out _);
-    }
+    public bool HasStreamSync(string guid) =>
+        StreamSyncedAt(guid) is { } at && DateTime.UtcNow - at < StreamTtl;
+
+    public DateTime? StreamSyncedAt(string guid) =>
+        _streamSyncs.TryGet(guid, out var at) ? at : null;
 
     public void SaveStremioMeta(Guid guid, StremioMeta meta)
     {
