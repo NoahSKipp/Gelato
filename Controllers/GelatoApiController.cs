@@ -1,10 +1,15 @@
 #pragma warning disable SA1611, SA1591, SA1615, CS0165
 
+using System.Collections.Concurrent;
 using System.ComponentModel.DataAnnotations;
+using System.Diagnostics;
 using System.Net;
 using System.Text.RegularExpressions;
+using Gelato.Decorators;
 using Gelato.Filters;
+using Gelato.Services;
 using Jellyfin.Data.Enums;
+using Jellyfin.Database.Implementations.Entities;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Dto;
@@ -13,6 +18,7 @@ using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.MediaEncoding;
 using MediaBrowser.Model.Dto;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 using MonoTorrent;
@@ -33,7 +39,19 @@ public sealed class GelatoApiController : ControllerBase
     private readonly InsertActionFilter _insertActionFilter;
     private readonly IServerApplicationHost _appHost;
     private readonly ISubtitleEncoder _subtitleEncoder;
+    private readonly WarmTracker _warm;
+    private readonly NzbdavPresence _nzbdav;
+    private readonly WarmupGate _gate;
     private readonly string _downloadPath;
+
+    private static readonly SlidingWindowLimiter BatchLimiter = new(
+        PrefetchBatch.CallsPerMinute,
+        TimeSpan.FromMinutes(1)
+    );
+
+    // user:item:probe -> when a batch last queued it, so a title is warmed
+    // once per StreamTTL however often a list asks.
+    private static readonly ConcurrentDictionary<string, DateTime> BatchQueued = new();
 
     public GelatoApiController(
         ILogger<GelatoApiController> log,
@@ -45,9 +63,15 @@ public sealed class GelatoApiController : ControllerBase
         IDtoService dtoService,
         InsertActionFilter insertActionFilter,
         IServerApplicationHost appHost,
-        ISubtitleEncoder subtitleEncoder
+        ISubtitleEncoder subtitleEncoder,
+        WarmTracker warm,
+        NzbdavPresence nzbdav,
+        WarmupGate gate
     )
     {
+        _warm = warm;
+        _nzbdav = nzbdav;
+        _gate = gate;
         _log = log;
         _gelatoManager = gelatoManager;
         _libraryManager = libraryManager;
@@ -101,75 +125,206 @@ public sealed class GelatoApiController : ControllerBase
 
         // PrimaryVersionId is Guid? as of Jellyfin 12 (was string), matching
         // MediaSourceManagerDecorator.cs's own real cache-key construction.
-        var video = item as Video;
-        var cacheKey = $"{userId}:{video?.PrimaryVersionId ?? item.Id}";
+        // A repeat prefetch still probes and warms subtitles even when the
+        // stream list is fresh.
+        RunDetached(() => WarmLoggedAsync(itemId, true, () => WarmItemAsync(item, userId, true)));
+        return Accepted();
+    }
 
-        if (_gelatoManager.HasStreamSync(cacheKey))
-        {
-            // Real bug, found live: this early return meant every prefetch
-            // after the very first one for a given title skipped the whole
-            // Task.Run below entirely - WarmPlaybackDataAsync (the probe
-            // and subtitle warm-up) included - since streams only ever
-            // need syncing once. A title already played earlier today
-            // never got its subtitles warmed at all; only a genuinely
-            // never-opened title did. Firing the warm here too means a
-            // repeat prefetch (a reader refocusing a poster, reopening a
-            // detail page) still gets a chance to warm subtitles even
-            // when there is no stream sync left to do.
-            RunDetached(async () =>
-            {
-                try
-                {
-                    await WarmPlaybackDataAsync(item, userId, itemId).ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    _log.LogWarning(ex, "Prefetch subtitle warm failed for {ItemId}", itemId);
-                }
-            });
-            return Accepted();
-        }
+    public sealed class PrefetchBatchRequest
+    {
+        public List<Guid> ItemIds { get; set; } = [];
+        public bool Probe { get; set; }
+    }
+
+    // Syncs the stream list of up to five titles one after another, and
+    // probes the first one too when asked. Answers at once with what was
+    // queued and what was already warm.
+    [HttpPost("prefetch-batch")]
+    [Authorize]
+    public ActionResult PrefetchBatchStreams([FromBody] PrefetchBatchRequest body)
+    {
+        if (!HttpContext.TryGetUserId(out var userId))
+            return Unauthorized();
+        var user = _userManager.GetUserById(userId);
+        if (user is null)
+            return Unauthorized();
+        if (!BatchLimiter.TryAcquire(userId))
+            return StatusCode(StatusCodes.Status429TooManyRequests);
+
+        var ttl = TimeSpan.FromSeconds(GelatoPlugin.Instance!.Configuration.StreamTTL);
+        var now = DateTime.UtcNow;
+        foreach (var stale in BatchQueued.Where(p => now - p.Value > ttl).Select(p => p.Key).ToList())
+            BatchQueued.TryRemove(stale, out _);
+
+        var (steps, alreadyWarm) = PrefetchBatch.Plan(
+            body.ItemIds ?? [],
+            body.Probe,
+            (id, probe) => IsAlreadyWarm(id, userId, user, probe, now, ttl)
+        );
+        foreach (var step in steps)
+            BatchQueued[$"{userId:N}:{step.ItemId:N}:{step.Probe}"] = now;
 
         RunDetached(async () =>
         {
-            try
+            for (var i = 0; i < steps.Count; i++)
             {
-                var count = await _gelatoManager
-                    .SyncStreams(item, userId, CancellationToken.None)
+                if (i > 0)
+                    await Task.Delay(PrefetchBatch.Gap).ConfigureAwait(false);
+                var step = steps[i];
+                await WarmLoggedAsync(step.ItemId, step.Probe, () => WarmBatchItemAsync(step, userId, user))
                     .ConfigureAwait(false);
-                if (count > 0)
-                {
-                    _gelatoManager.SetStreamSync(cacheKey);
-                }
-
-                // Sync alone only warms the stream list itself. Pressing
-                // Play still hits GetPlaybackMediaSources' own NeedsProbe
-                // check next, which blocks on a real ffprobe against the
-                // resolved stream (MediaSourceManagerDecorator.cs) since a
-                // freshly synced stream never carries real MediaStreams -
-                // there is no way to know a debrid/torrent source's real
-                // codecs/container without actually reading it. Warming
-                // that here too, in the same background prefetch window,
-                // means a real Play later reuses the cached probe result
-                // (NeedsProbe false the second time) instead of paying for
-                // it at the one moment a reader is actually waiting.
-                // GetPlaybackMediaSources is the exact same call Play
-                // itself makes; IMediaSourceManager resolves to
-                // MediaSourceManagerDecorator (ServiceRegistrator.cs), so
-                // this runs its real probe/segment logic, not a stub.
-                // WarmPlaybackDataAsync also warms English/German subtitle
-                // conversion once the probed sources are in hand - see its
-                // own header for why that specific call matters.
-                await WarmPlaybackDataAsync(item, userId, itemId).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                _log.LogWarning(ex, "Prefetch sync failed for {ItemId}", itemId);
             }
         });
 
-        return Accepted();
+        return Accepted(new { Queued = steps.Select(s => s.ItemId), AlreadyWarm = alreadyWarm });
     }
+
+    // { sourceId: warmedAtUtc } for this title's sources that start fast now,
+    // under the source ids clients are given.
+    [HttpGet("warm/{itemId:guid}")]
+    [Authorize]
+    public async Task<ActionResult<Dictionary<string, DateTime>>> GetWarmSources(
+        [FromRoute, Required] Guid itemId,
+        CancellationToken ct
+    )
+    {
+        if (!HttpContext.TryGetUserId(out var userId) || _userManager.GetUserById(userId) is not { } user)
+            return Unauthorized();
+        var present = await _nzbdav.SnapshotAsync(ct).ConfigureAwait(false);
+        return Ok(WarmSourcesOf(itemId, user, present));
+    }
+
+    // The same for a list view: { itemId: { sourceId: warmedAtUtc } }.
+    [HttpGet("warm")]
+    [Authorize]
+    public async Task<ActionResult<Dictionary<string, Dictionary<string, DateTime>>>> GetWarmItems(
+        [FromQuery] string? ids,
+        CancellationToken ct
+    )
+    {
+        if (!HttpContext.TryGetUserId(out var userId) || _userManager.GetUserById(userId) is not { } user)
+            return Unauthorized();
+        var present = await _nzbdav.SnapshotAsync(ct).ConfigureAwait(false);
+        var result = new Dictionary<string, Dictionary<string, DateTime>>();
+        foreach (var raw in (ids ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Take(50))
+        {
+            if (!Guid.TryParse(raw, out var id))
+                continue;
+            var warm = WarmSourcesOf(id, user, present);
+            if (warm.Count > 0)
+                result[id.ToString("N")] = warm;
+        }
+        return Ok(result);
+    }
+
+    // { sourceId: qualityTier }, e.g. "2160p-dv", "1080p-sdr", or "unknown".
+    [HttpGet("tiers/{itemId:guid}")]
+    [Authorize]
+    public ActionResult<Dictionary<string, string>> GetQualityTiers([FromRoute, Required] Guid itemId)
+    {
+        if (!HttpContext.TryGetUserId(out var userId) || _userManager.GetUserById(userId) is not { } user)
+            return Unauthorized();
+        var item = _libraryManager.GetItemById(itemId);
+        if (item is null || _mediaSourceManager is not MediaSourceManagerDecorator sources)
+            return Ok(new Dictionary<string, string>());
+        var tiers = new Dictionary<string, string>();
+        foreach (var row in sources.ListSourceRows(item, user))
+            tiers.TryAdd(row.ClientId, row.Tier);
+        return Ok(tiers);
+    }
+
+    private Dictionary<string, DateTime> WarmSourcesOf(Guid itemId, User user, Func<string, bool?> present)
+    {
+        var warm = new Dictionary<string, DateTime>();
+        var item = _libraryManager.GetItemById(itemId);
+        if (item is null || _mediaSourceManager is not MediaSourceManagerDecorator sources)
+            return warm;
+        foreach (var row in sources.ListSourceRows(item, user))
+        {
+            if (_warm.WarmedAt(row.RowId, present) is { } at)
+                warm.TryAdd(row.ClientId, DateTime.SpecifyKind(at, DateTimeKind.Utc));
+        }
+        return warm;
+    }
+
+    private bool IsAlreadyWarm(Guid itemId, Guid userId, User user, bool probe, DateTime now, TimeSpan ttl)
+    {
+        if (BatchQueued.TryGetValue($"{userId:N}:{itemId:N}:{probe}", out var queuedAt) && now - queuedAt < ttl)
+            return true;
+        var item = _libraryManager.GetItemById(itemId);
+        if (item is null)
+            return false;
+        var cacheKey = $"{userId}:{(item as Video)?.PrimaryVersionId ?? item.Id}";
+        if (!_gelatoManager.HasStreamSync(cacheKey))
+            return false;
+        if (!probe)
+            return true;
+        if (_mediaSourceManager is not MediaSourceManagerDecorator sources)
+            return false;
+        var first = sources.ListSourceRows(item, user).FirstOrDefault();
+        return first is not null && _warm.WarmedAt(first.RowId) is not null;
+    }
+
+    private async Task WarmBatchItemAsync(PrefetchStep step, Guid userId, User user)
+    {
+        var item = _libraryManager.GetItemById(step.ItemId);
+        if (item is null)
+        {
+            // A search result not in the library yet: inserting it is the
+            // slow part of its first open.
+            if (_gelatoManager.GetStremioMeta(step.ItemId) is { } meta)
+                item = await InsertForPrefetchAsync(step.ItemId, userId, meta, user).ConfigureAwait(false);
+            if (item is null)
+                return;
+        }
+        if (item.GetBaseItemKind() is not (BaseItemKind.Movie or BaseItemKind.Episode))
+            return;
+        await WarmItemAsync(item, userId, step.Probe).ConfigureAwait(false);
+    }
+
+    private async Task WarmItemAsync(BaseItem item, Guid userId, bool probe)
+    {
+        var cacheKey = $"{userId}:{(item as Video)?.PrimaryVersionId ?? item.Id}";
+        if (!_gelatoManager.HasStreamSync(cacheKey))
+        {
+            var count = await _gelatoManager
+                .SyncStreams(item, userId, CancellationToken.None)
+                .ConfigureAwait(false);
+            if (count > 0)
+                _gelatoManager.SetStreamSync(cacheKey);
+        }
+        // The probe is the same call Play makes, so Play reuses its result.
+        if (probe)
+            await WarmPlaybackDataAsync(item, userId, item.Id).ConfigureAwait(false);
+    }
+
+    // One line per warm-up; no addresses.
+    private Task WarmLoggedAsync(Guid itemId, bool probe, Func<Task> work) =>
+        _gate.RunAsync(async () =>
+        {
+            var sw = Stopwatch.StartNew();
+            var ok = false;
+            try
+            {
+                await work().ConfigureAwait(false);
+                ok = true;
+            }
+            catch (Exception ex)
+            {
+                _log.LogDebug(ex, "Warm-up failed for {ItemId}", itemId);
+            }
+            finally
+            {
+                _log.LogInformation(
+                    "Warm-up {ItemId}: {Ms} ms, ok={Ok}, probe={Probe}",
+                    itemId,
+                    sw.ElapsedMilliseconds,
+                    ok,
+                    probe
+                );
+            }
+        });
 
     // Work that outlives the request must not carry its HttpContext along:
     // ASP.NET Core reuses that object for the next request, and the source
@@ -284,53 +439,64 @@ public sealed class GelatoApiController : ControllerBase
             return Unauthorized();
         }
 
-        RunDetached(async () =>
-        {
-            try
-            {
-                var isSeries = stremioMeta.Type == StremioMediaType.Series;
-                var root = isSeries
-                    ? _gelatoManager.TryGetSeriesFolder(userId)
-                    : _gelatoManager.TryGetMovieFolder(userId);
-                if (root is null)
-                {
-                    return;
-                }
-
-                if (
-                    _gelatoManager.IntoBaseItem(stremioMeta) is { } candidate
-                    && _gelatoManager.FindExistingItem(candidate, user) is not null
-                )
-                {
-                    // Something else (a real open, a duplicate prefetch) already
-                    // inserted this between the card rendering and this firing.
-                    return;
-                }
-
-                var cfg = GelatoPlugin.Instance!.GetConfig(userId);
-                var meta = await cfg
-                    .Stremio.GetMetaAsync(stremioMeta.ImdbId ?? stremioMeta.Id, stremioMeta.Type)
-                    .ConfigureAwait(false);
-                if (meta is null)
-                {
-                    return;
-                }
-
-                var inserted = await _insertActionFilter
-                    .InsertMetaAsync(itemId, root, meta, user)
-                    .ConfigureAwait(false);
-                if (inserted is not null)
-                {
-                    _gelatoManager.RemoveStremioMeta(itemId);
-                }
-            }
-            catch (Exception ex)
-            {
-                _log.LogWarning(ex, "Prefetch insert failed for {ItemId}", itemId);
-            }
-        });
+        RunDetached(() =>
+            WarmLoggedAsync(itemId, false, () => InsertForPrefetchAsync(itemId, userId, stremioMeta, user))
+        );
 
         return Accepted();
+    }
+
+    private async Task<BaseItem?> InsertForPrefetchAsync(
+        Guid itemId,
+        Guid userId,
+        StremioMeta stremioMeta,
+        User user
+    )
+    {
+        try
+        {
+            var isSeries = stremioMeta.Type == StremioMediaType.Series;
+            var root = isSeries
+                ? _gelatoManager.TryGetSeriesFolder(userId)
+                : _gelatoManager.TryGetMovieFolder(userId);
+            if (root is null)
+            {
+                return null;
+            }
+
+            if (
+                _gelatoManager.IntoBaseItem(stremioMeta) is { } candidate
+                && _gelatoManager.FindExistingItem(candidate, user) is { } existing
+            )
+            {
+                // Something else (a real open, a duplicate prefetch) already
+                // inserted this between the card rendering and this firing.
+                return existing;
+            }
+
+            var cfg = GelatoPlugin.Instance!.GetConfig(userId);
+            var meta = await cfg
+                .Stremio.GetMetaAsync(stremioMeta.ImdbId ?? stremioMeta.Id, stremioMeta.Type)
+                .ConfigureAwait(false);
+            if (meta is null)
+            {
+                return null;
+            }
+
+            var inserted = await _insertActionFilter
+                .InsertMetaAsync(itemId, root, meta, user)
+                .ConfigureAwait(false);
+            if (inserted is not null)
+            {
+                _gelatoManager.RemoveStremioMeta(itemId);
+            }
+            return inserted;
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Prefetch insert failed for {ItemId}", itemId);
+            return null;
+        }
     }
 
     // Real bottleneck: SearchActionFilter.cs intercepts the native
