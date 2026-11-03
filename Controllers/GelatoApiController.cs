@@ -116,7 +116,7 @@ public sealed class GelatoApiController : ControllerBase
             // repeat prefetch (a reader refocusing a poster, reopening a
             // detail page) still gets a chance to warm subtitles even
             // when there is no stream sync left to do.
-            _ = Task.Run(async () =>
+            RunDetached(async () =>
             {
                 try
                 {
@@ -130,7 +130,7 @@ public sealed class GelatoApiController : ControllerBase
             return Accepted();
         }
 
-        _ = Task.Run(async () =>
+        RunDetached(async () =>
         {
             try
             {
@@ -169,6 +169,17 @@ public sealed class GelatoApiController : ControllerBase
         });
 
         return Accepted();
+    }
+
+    // Work that outlives the request must not carry its HttpContext along:
+    // ASP.NET Core reuses that object for the next request, and the source
+    // decorator reads the chosen source id from it.
+    private static void RunDetached(Func<Task> work)
+    {
+        using (ExecutionContext.SuppressFlow())
+        {
+            _ = Task.Run(work);
+        }
     }
 
     private async Task WarmPlaybackDataAsync(BaseItem item, Guid userId, Guid itemId)
@@ -273,7 +284,7 @@ public sealed class GelatoApiController : ControllerBase
             return Unauthorized();
         }
 
-        _ = Task.Run(async () =>
+        RunDetached(async () =>
         {
             try
             {
