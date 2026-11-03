@@ -19,6 +19,11 @@
     <PackageReference Include="Microsoft.Data.Sqlite.Core" Version="9.0.0" PrivateAssets="all" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Remove="tests/**" />
+    <None Remove="tests/**" />
+    <EmbeddedResource Remove="tests/**" />
+  </ItemGroup>
+  <ItemGroup>
     <EmbeddedResource Include="Config\config.html" />
     <!-- Embed all frontend assets so they are delivered with the plugin -->
     <EmbeddedResource Include="Frontend\**\*" />

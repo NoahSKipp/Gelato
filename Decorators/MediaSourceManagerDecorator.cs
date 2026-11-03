@@ -48,7 +48,8 @@ public sealed class MediaSourceManagerDecorator(
     Lazy<GelatoManager> manager,
     Lazy<SubtitleProvider> subtitleProvider,
     IMediaSegmentManager mediaSegmentManager,
-    IEnumerable<ICustomMetadataProvider<Video>> videoProbeProviders
+    IEnumerable<ICustomMetadataProvider<Video>> videoProbeProviders,
+    BadStreamStore badStreams
 ) : IMediaSourceManager
 {
     private readonly IMediaSourceManager _inner =
@@ -74,6 +75,10 @@ public sealed class MediaSourceManagerDecorator(
     // Item details only list the first sources unless the caller asks for
     // MediaSources explicitly (Jellio's stream picker does).
     private const int DetailSourceCap = 15;
+
+    // Sources probed in one Play before giving up on finding a real stream.
+    private const int MaxPlaceholderCandidates = 3;
+    private readonly BadStreamStore _badStreams = badStreams;
     private static readonly TimeSpan StreamInfoTtl = TimeSpan.FromMinutes(5);
 
     private readonly ConcurrentDictionary<
@@ -137,13 +142,20 @@ public sealed class MediaSourceManagerDecorator(
         BaseItem item,
         bool enablePathSubstitution,
         User? user,
-        Guid? mediaSourceId
+        Guid? mediaSourceId,
+        IReadOnlySet<string>? exclude = null
     )
     {
         var sw = Stopwatch.StartNew();
         var slots = ResolveSlots(item, enablePathSubstitution, user, out var timings);
         if (slots is null)
             return null;
+        if (exclude is { Count: > 0 })
+        {
+            slots = slots.Where(s => !exclude.Contains(s.Id)).ToList();
+            if (slots.Count == 0)
+                return null;
+        }
 
         var index = 0;
         if (mediaSourceId is { } id && id != item.Id)
@@ -284,6 +296,18 @@ public sealed class MediaSourceManagerDecorator(
                     && !(k.Path?.StartsWith("stremio", StringComparison.OrdinalIgnoreCase) ?? false)
                 )
                 .ToList();
+        }
+
+        // Placeholder clips found earlier stay out while any other source is left.
+        var usable = slots.Where(s => s.Stream is null || !_badStreams.IsBad(s.Id)).ToList();
+        if (usable.Count > 0 && usable.Count < slots.Count)
+        {
+            _log.LogDebug(
+                "Leaving out {Count} placeholder sources for {Id}",
+                slots.Count - usable.Count,
+                item.Id
+            );
+            slots = usable;
         }
 
         // failsafe. mediasources cannot be null
@@ -511,31 +535,67 @@ public sealed class MediaSourceManagerDecorator(
                 return [];
         }
 
-        if (NeedsProbe(selected))
+        var expectedSeconds = ExpectedRuntimeSeconds(item, owner);
+        var rejected = new HashSet<string>();
+        var placeholder = false;
+        for (var attempt = 1; ; attempt++)
         {
-            var libraryOptions = _libraryManager.GetLibraryOptions(owner);
+            if (NeedsProbe(selected))
+            {
+                var libraryOptions = _libraryManager.GetLibraryOptions(owner);
 
-            var segmentTask = _mediaSegmentManager.RunSegmentPluginProviders(
-                owner,
-                libraryOptions,
-                false,
-                ct
+                var segmentTask = _mediaSegmentManager.RunSegmentPluginProviders(
+                    owner,
+                    libraryOptions,
+                    false,
+                    ct
+                );
+                var metadataTask = ProbeStreamAsync((Video)owner, selected.Path, ct);
+                //  var subtitleTask = DownloadSubtitles((Video)owner, ct);
+
+                await Task.WhenAll(metadataTask, segmentTask).ConfigureAwait(false);
+
+                await owner
+                    .UpdateToRepositoryAsync(ItemUpdateType.MetadataEdit, ct)
+                    .ConfigureAwait(false);
+
+                _streamInfo.TryRemove(owner.Id, out _);
+                var probedId = owner.Id == item.Id ? mediaSourceId : owner.Id;
+                selected =
+                    GetStaticMediaSource(item, enablePathSubstitution, user, probedId, rejected)
+                    ?? selected;
+            }
+
+            var reason = FingerprintOf(selected, expectedSeconds);
+            placeholder = reason is not null;
+            if (reason is null || owner.Id == item.Id)
+                break;
+
+            var sourceId = owner.Id.ToString("N", CultureInfo.InvariantCulture);
+            _badStreams.MarkBad(sourceId);
+            rejected.Add(sourceId);
+            _log.LogWarning(
+                "Placeholder clip for {ItemId} source {SourceId}: probed {Probed}s, expected {Expected}s, {Reason}",
+                item.Id,
+                sourceId,
+                Math.Round((selected.RunTimeTicks ?? 0) / (double)TimeSpan.TicksPerSecond),
+                Math.Round(expectedSeconds ?? 0),
+                reason
             );
-            var metadataTask = ProbeStreamAsync((Video)owner, selected.Path, ct);
-            //  var subtitleTask = DownloadSubtitles((Video)owner, ct);
 
-            await Task.WhenAll(metadataTask, segmentTask).ConfigureAwait(false);
-
-            await owner
-                .UpdateToRepositoryAsync(ItemUpdateType.MetadataEdit, ct)
-                .ConfigureAwait(false);
-
-            _streamInfo.TryRemove(owner.Id, out _);
-            selected =
-                GetStaticMediaSource(item, enablePathSubstitution, user, mediaSourceId) ?? selected;
+            if (attempt >= MaxPlaceholderCandidates)
+                break;
+            var next = GetStaticMediaSource(item, enablePathSubstitution, user, null, rejected);
+            if (next is null)
+                break;
+            var nextOwner = ResolveOwnerFor(next, item);
+            if (!IsGelatoPlaybackItem(nextOwner))
+                break;
+            selected = next;
+            owner = nextOwner;
         }
 
-        if (item.RunTimeTicks is null && selected.RunTimeTicks is not null)
+        if (!placeholder && item.RunTimeTicks is null && selected.RunTimeTicks is not null)
         {
             item.RunTimeTicks = selected.RunTimeTicks;
             await item.UpdateToRepositoryAsync(ItemUpdateType.MetadataEdit, ct)
@@ -580,12 +640,36 @@ public sealed class MediaSourceManagerDecorator(
 
         return [selected];
 
+        static string? FingerprintOf(MediaSourceInfo s, double? expected)
+        {
+            var streams = s.MediaStreams ?? [];
+            var video = streams.FirstOrDefault(ms => ms.Type == MediaStreamType.Video);
+            if (video is null)
+                return null;
+            return PlaceholderFingerprint.Detect(
+                (s.RunTimeTicks ?? 0) / (double)TimeSpan.TicksPerSecond,
+                expected,
+                video.AverageFrameRate ?? video.RealFrameRate,
+                streams.Any(ms => ms.Type == MediaStreamType.Audio),
+                s.Bitrate ?? video.BitRate
+            );
+        }
+
         static bool NeedsProbe(MediaSourceInfo s) =>
             (s.MediaStreams?.All(ms => ms.Type != MediaStreamType.Video) ?? true)
             || (s.RunTimeTicks ?? 0) < TimeSpan.FromMinutes(2).Ticks;
 
         BaseItem ResolveOwnerFor(MediaSourceInfo s, BaseItem fallback) =>
             Guid.TryParse(s.ETag, out var g) ? libraryManager.GetItemById(g) ?? fallback : fallback;
+    }
+
+    // The title's own runtime, else the one AIOStreams printed in the label.
+    private static double? ExpectedRuntimeSeconds(BaseItem item, BaseItem owner)
+    {
+        if (item.RunTimeTicks is > 0)
+            return item.RunTimeTicks.Value / (double)TimeSpan.TicksPerSecond;
+        return PlaceholderFingerprint.ParseLabelRuntime(owner.GelatoData<string>("description"))
+            ?? PlaceholderFingerprint.ParseLabelRuntime(owner.GelatoData<string>("name"));
     }
 
     // The stream and HLS routes hand this source straight to ffmpeg as its
