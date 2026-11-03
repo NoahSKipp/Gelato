@@ -8,6 +8,14 @@
     "owner": "lstb1t",
     "versions": [
       {
+        "changelog": "## [0.26.24.0] - 2026-11-03\n\n### 🚀 Features\n\n- *(playback)* Drop AIOStreams' placeholder clip at probe time\n- *(warm)* Track which sources will start fast\n- *(api)* Warm state, quality tiers and batch prefetch for clients\n\n### 🐛 Bug Fixes\n\n- *(streams)* Run one stream sync per title and keep rows that only lost their guid\n- *(prefetch)* Warm up without the finished request's context\n\n### ⚡ Performance\n\n- *(streams)* Keep the stream sync marker across restarts\n\n### ⚙️ Miscellaneous Tasks\n\n- Run the unit tests on main and pull requests\n- *(release)* Bump version to v0.26.24.0\n- Leave the version bump to the release workflow\n",
+        "checksum": "6d60e820d29261b9da8f53bd04528a28",
+        "sourceUrl": "https://github.com/NoahSKipp/Gelato/releases/download/v0.26.24.0/gelato_0.26.24.0.zip",
+        "targetAbi": "12.0.0.0",
+        "timestamp": "2026-11-03T16:05:42Z",
+        "version": "0.26.24.0"
+      },
+      {
         "changelog": "## [0.26.23.2] - 2026-10-26\n\n### 🐛 Bug Fixes\n\n- *(streams)* Never hand ffmpeg an empty input for a Gelato stream\n",
         "checksum": "90317610c90ddf468115e119b9133217",
         "sourceUrl": "https://github.com/NoahSKipp/Gelato/releases/download/v0.26.23.2/gelato_0.26.23.2.zip",
