@@ -8,6 +8,14 @@
     "owner": "lstb1t",
     "versions": [
       {
+        "changelog": "## [0.26.24.1] - 2026-11-03\n\n### 🐛 Bug Fixes\n\n- *(playback)* Stop Play racing a warm-up probe into a source with no streams\n\n### 🧪 Testing\n\n- Script that checks Play right after a warm-up on a real server\n",
+        "checksum": "24c3d0d2fe4ada1f10bb598d48d6b9b8",
+        "sourceUrl": "https://github.com/NoahSKipp/Gelato/releases/download/v0.26.24.1/gelato_0.26.24.1.zip",
+        "targetAbi": "12.0.0.0",
+        "timestamp": "2026-11-03T20:24:35Z",
+        "version": "0.26.24.1"
+      },
+      {
         "changelog": "## [0.26.24.0] - 2026-11-03\n\n### 🚀 Features\n\n- *(playback)* Drop AIOStreams' placeholder clip at probe time\n- *(warm)* Track which sources will start fast\n- *(api)* Warm state, quality tiers and batch prefetch for clients\n\n### 🐛 Bug Fixes\n\n- *(streams)* Run one stream sync per title and keep rows that only lost their guid\n- *(prefetch)* Warm up without the finished request's context\n\n### ⚡ Performance\n\n- *(streams)* Keep the stream sync marker across restarts\n\n### ⚙️ Miscellaneous Tasks\n\n- Run the unit tests on main and pull requests\n- *(release)* Bump version to v0.26.24.0\n- Leave the version bump to the release workflow\n",
         "checksum": "6d60e820d29261b9da8f53bd04528a28",
         "sourceUrl": "https://github.com/NoahSKipp/Gelato/releases/download/v0.26.24.0/gelato_0.26.24.0.zip",
