@@ -106,6 +106,8 @@ public sealed class GelatoManager(
         _streamSyncs.Set(guid, now);
     }
 
+    public void ClearStreamSync(string guid) => _streamSyncs.Remove(guid);
+
     public bool HasStreamSync(string guid) =>
         StreamSyncedAt(guid) is { } at && DateTime.UtcNow - at < StreamTtl;
 

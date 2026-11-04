@@ -61,6 +61,7 @@ public sealed class MediaSourceManagerDecorator(
     private readonly IHttpContextAccessor _http =
         http ?? throw new ArgumentNullException(nameof(http));
     private readonly KeyLock _lock = new();
+    private readonly ResyncThrottle _resyncs = new(TimeSpan.FromSeconds(60));
     private readonly IMediaSegmentManager _mediaSegmentManager =
         mediaSegmentManager ?? throw new ArgumentNullException(nameof(mediaSegmentManager));
     private readonly ILibraryManager _libraryManager =
@@ -274,8 +275,12 @@ public sealed class MediaSourceManagerDecorator(
         var query = sw.ElapsedMilliseconds;
 
         // A stream row's streams are its title's: syncing the row itself only
-        // ever logged "item is a stream" on every stream request.
-        if (allowSync && uri is not null && !item.IsStream() && !manager.HasStreamSync(cacheKey))
+        // ever logged "item is a stream" on every stream request. A sync
+        // marker without any stream rows behind it is not trusted.
+        var needsSync =
+            !manager.HasStreamSync(cacheKey)
+            || (streams.Count == 0 && _resyncs.TryEnter("empty:" + cacheKey));
+        if (allowSync && uri is not null && !item.IsStream() && needsSync)
         {
             // Bug in web UI that calls the detail page twice. So that's why there's a lock.
             // With stored streams nobody waits on the refresh, so it queues
@@ -574,6 +579,7 @@ public sealed class MediaSourceManagerDecorator(
         var expectedSeconds = ExpectedRuntimeSeconds(item, owner);
         var rejected = new HashSet<string>();
         var placeholder = false;
+        var resynced = false;
         for (var attempt = 1; ; attempt++)
         {
             if (NeedsProbe(selected))
@@ -607,7 +613,20 @@ public sealed class MediaSourceManagerDecorator(
                         started.ElapsedMilliseconds,
                         ex.Message
                     );
-                    throw;
+                    // The stored links can have expired at the addon (AIOStreams
+                    // answers 400 "not found in store"), or the title has no
+                    // stream rows left: fetch the streams again once and try
+                    // the same source with its fresh link.
+                    if (resynced || !await ResyncAsync(item, user, ex.Message, ct).ConfigureAwait(false))
+                        throw;
+                    resynced = true;
+                    selected = GetStaticMediaSource(item, enablePathSubstitution, user, mediaSourceId, rejected);
+                    if (selected is null)
+                        throw;
+                    owner = ResolveOwnerFor(selected, item);
+                    if (!IsGelatoPlaybackItem(owner))
+                        throw;
+                    continue;
                 }
             }
 
@@ -1103,6 +1122,49 @@ public sealed class MediaSourceManagerDecorator(
         }
 
         return streams;
+    }
+
+    // Fetches a title's streams again after its stored links failed, and
+    // drops the sync marker that called them fresh. False when nothing new
+    // came back or this title was refreshed less than a minute ago.
+    private async Task<bool> ResyncAsync(BaseItem item, User? user, string why, CancellationToken ct)
+    {
+        var userId = user?.Id ?? Guid.Empty;
+        if (userId == Guid.Empty)
+            _http.HttpContext.TryGetUserId(out userId);
+        if (userId == Guid.Empty || item.IsStream())
+            return false;
+        var cacheKey = $"{userId}:{(item as Video)?.PrimaryVersionId ?? item.Id}";
+        if (!_resyncs.TryEnter("probe:" + cacheKey))
+            return false;
+
+        var manager = _manager.Value;
+        manager.ClearStreamSync(cacheKey);
+        _log.LogInformation(
+            "Stream links for {ItemId} did not play ({Why}): fetching the streams again",
+            item.Id,
+            why
+        );
+        var sw = Stopwatch.StartNew();
+        int count;
+        try
+        {
+            count = await manager.SyncStreams(item, userId, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _log.LogWarning(ex, "Fetching the streams again for {ItemId} failed", item.Id);
+            return false;
+        }
+        if (count > 0)
+            manager.SetStreamSync(cacheKey);
+        _log.LogInformation(
+            "Fetched {Count} streams again for {ItemId} in {Ms} ms",
+            count,
+            item.Id,
+            sw.ElapsedMilliseconds
+        );
+        return count > 0;
     }
 
     // Only ever run through _probeGate, so the item is changed and restored
