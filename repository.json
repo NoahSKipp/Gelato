@@ -8,6 +8,14 @@
     "owner": "lstb1t",
     "versions": [
       {
+        "changelog": "## [0.26.25.0] - 2026-11-04\n\n### 🚀 Features\n\n- *(db)* One shared gate for Gelato's background writers\n\n### 🐛 Bug Fixes\n\n- *(playback)* Probe streams with the probe provider, not a full refresh\n- *(library)* Survive item queries from a task started by a finished request\n- *(addons)* Parse addon JSON with raw line breaks and keep addon URLs out of logs\n- *(streams)* Sync again after Purge streams instead of failing Play for an hour\n\n### 📚 Documentation\n\n- Database contention findings and a test to repeat on a copy of the server\n\n### ⚡ Performance\n\n- *(images)* Rewrite an image sidecar only when its address changed\n- *(streams)* Delete stale stream rows in one go and stop saving them first\n",
+        "checksum": "607aad8eec2aaf5ec0fc3008d3200c12",
+        "sourceUrl": "https://github.com/NoahSKipp/Gelato/releases/download/v0.26.25.0/gelato_0.26.25.0.zip",
+        "targetAbi": "12.0.0.0",
+        "timestamp": "2026-11-04T09:06:07Z",
+        "version": "0.26.25.0"
+      },
+      {
         "changelog": "## [0.26.24.1] - 2026-11-03\n\n### 🐛 Bug Fixes\n\n- *(playback)* Stop Play racing a warm-up probe into a source with no streams\n\n### 🧪 Testing\n\n- Script that checks Play right after a warm-up on a real server\n",
         "checksum": "a62376c3e2210834caed4bbe9da98c96",
         "sourceUrl": "https://github.com/NoahSKipp/Gelato/releases/download/v0.26.24.1/gelato_0.26.24.1.zip",
