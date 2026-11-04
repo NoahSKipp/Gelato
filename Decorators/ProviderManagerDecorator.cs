@@ -44,7 +44,7 @@ public sealed class ProviderManagerDecorator(
             // Always persist the URL at the gelato fake path so it can be resolved on demand
             // regardless of LazyImages mode — this is the permanent source-of-truth for the URL.
             var info = BuildImageInfo(appPaths, item.Id, type, imageIndex);
-            File.WriteAllText(info.Path + ".url", url);
+            WriteSidecar(info.Path + ".url", url);
 
             if (GelatoPlugin.Instance?.Configuration.LazyImages == true)
             {
@@ -85,8 +85,21 @@ public sealed class ProviderManagerDecorator(
         var info = BuildImageInfo(appPaths, item.Id, type, imageIndex);
         // Store the remote URL in a sidecar file next to the placeholder.
         // ImageResourceFilter reads this file to proxy the image.
-        File.WriteAllText(info.Path + ".url", url);
+        WriteSidecar(info.Path + ".url", url);
         item.SetImage(info, imageIndex ?? 0);
+    }
+
+    // A refresh asks for the same images again and again; rewrite the
+    // sidecar only when the address changed.
+    private static void WriteSidecar(string path, string url)
+    {
+        try
+        {
+            if (File.Exists(path) && File.ReadAllText(path) == url)
+                return;
+        }
+        catch (IOException) { }
+        File.WriteAllText(path, url);
     }
 
     public static ItemImageInfo BuildImageInfo(
