@@ -59,7 +59,7 @@ public class GelatoStremioProvider(
         return url;
     }
 
-    private async Task<T?> GetJsonAsync<T>(string url)
+    private async Task<T?> GetJsonAsync<T>(string url, CancellationToken ct = default)
     {
         var shown = Services.JsonText.RedactAddonUrl(url, baseUrl);
         log.LogDebug("GetJsonAsync: requesting {Url}", shown);
@@ -67,7 +67,7 @@ public class GelatoStremioProvider(
         try
         {
             var c = NewClient();
-            using var resp = await c.GetAsync(url).ConfigureAwait(false);
+            using var resp = await c.GetAsync(url, ct).ConfigureAwait(false);
 
             if (!resp.IsSuccessStatusCode)
             {
@@ -85,7 +85,7 @@ public class GelatoStremioProvider(
                 );
             }
 
-            var body = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
+            var body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             try
             {
                 return JsonSerializer.Deserialize<T>(body, JsonOpts);
@@ -100,6 +100,11 @@ public class GelatoStremioProvider(
                 log.LogDebug("GetJsonAsync: escaped control characters in {Url}", shown);
                 return JsonSerializer.Deserialize<T>(cleaned, JsonOpts);
             }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            log.LogDebug("GetJsonAsync: {Url} abandoned by the client", shown);
+            throw;
         }
         catch (Exception ex)
         {
@@ -442,7 +447,8 @@ public class GelatoStremioProvider(
         string id,
         string mediaType,
         string? search = null,
-        int? skip = null
+        int? skip = null,
+        CancellationToken ct = default
     )
     {
         var extras = new List<string>();
@@ -453,14 +459,15 @@ public class GelatoStremioProvider(
 
         // seen maybe one type thats capital, but thats their issue
         var url = BuildUrl(["catalog", mediaType.ToLower(), id], extras);
-        var r = await GetJsonAsync<StremioCatalogResponse>(url);
+        var r = await GetJsonAsync<StremioCatalogResponse>(url, ct);
         return r?.Metas ?? [];
     }
 
     public async Task<IReadOnlyList<StremioMeta>> SearchAsync(
         string query,
         StremioMediaType mediaType,
-        int? skip = null
+        int? skip = null,
+        CancellationToken ct = default
     )
     {
         var manifest = await GetManifestAsync();
@@ -483,7 +490,7 @@ public class GelatoStremioProvider(
             return [];
         }
 
-        return await GetCatalogMetasAsync(catalog.Id, mediaType.ToString(), query, skip);
+        return await GetCatalogMetasAsync(catalog.Id, mediaType.ToString(), query, skip, ct);
     }
 }
 

@@ -1,7 +1,12 @@
+using System.Diagnostics;
 using Gelato.Config;
+using Gelato.Services;
 using Jellyfin.Data.Enums;
 using MediaBrowser.Controller.Dto;
+using MediaBrowser.Controller.Entities;
 using MediaBrowser.Model.Dto;
+using MediaBrowser.Model.Entities;
+using MediaBrowser.Model.MediaInfo;
 using MediaBrowser.Model.Querying;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
@@ -16,6 +21,25 @@ public class SearchActionFilter(
 ) : IAsyncActionFilter, IOrderedFilter
 {
     public int Order => 1;
+
+    private static readonly SearchCache<List<BaseItemDto>> Cache = new(TimeSpan.FromSeconds(60));
+
+    // A search result is not in the library yet, so it has no extras,
+    // trailers, streams or chapters; Jellyfin still asked the database for
+    // each (about 0.4 s per result on a large library). Every other field
+    // is built as before, and these are filled in with what they would be.
+    private static readonly ItemFields[] SkippedFields =
+    [
+        ItemFields.SpecialFeatureCount,
+        ItemFields.LocalTrailerCount,
+        ItemFields.MediaSources,
+        ItemFields.MediaStreams,
+        ItemFields.Chapters,
+    ];
+
+    private static readonly ItemFields[] ResultFields = Enum.GetValues<ItemFields>()
+        .Except(SkippedFields)
+        .ToArray();
 
     public async Task OnActionExecutionAsync(
         ActionExecutingContext ctx,
@@ -54,18 +78,54 @@ public class SearchActionFilter(
         ctx.TryGetActionArgument("startIndex", out var start, 0);
         ctx.TryGetActionArgument("limit", out var limit, 25);
 
-        var metas = await SearchMetasAsync(searchTerm, requestedTypes, cfg, userId);
+        var ct = ctx.HttpContext.RequestAborted;
+        var sw = Stopwatch.StartNew();
+        var key = SearchCache<List<BaseItemDto>>.Key(
+            userId,
+            searchTerm,
+            requestedTypes
+                .Select(t => t.ToString())
+                .Append(cfg.FilterUnreleased ? $"unreleased:{cfg.FilterUnreleasedBufferDays}" : "all")
+        );
+
+        long addonMs = 0;
+        var cached = Cache.TryGet(key, out var dtos);
+        if (!cached)
+        {
+            List<StremioMeta> metas;
+            try
+            {
+                metas = await SearchMetasAsync(searchTerm, requestedTypes, cfg, userId, ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                log.LogDebug("Search \"{Query}\" abandoned by the client", searchTerm);
+                ctx.Result = new EmptyResult();
+                return;
+            }
+            addonMs = sw.ElapsedMilliseconds;
+            dtos = ConvertMetasToDtos(metas, ct);
+            if (ct.IsCancellationRequested)
+            {
+                ctx.Result = new EmptyResult();
+                return;
+            }
+            Cache.Set(key, dtos);
+        }
 
         log.LogInformation(
-            "Intercepted /Items search \"{Query}\" types=[{Types}] start={Start} limit={Limit} results={Results}",
+            "Intercepted /Items search \"{Query}\" types=[{Types}] start={Start} limit={Limit} results={Results} in {Ms} ms (addon {AddonMs} ms, items {ItemsMs} ms{Cached})",
             searchTerm,
             string.Join(",", requestedTypes),
             start,
             limit,
-            metas.Count
+            dtos.Count,
+            sw.ElapsedMilliseconds,
+            addonMs,
+            sw.ElapsedMilliseconds - addonMs,
+            cached ? ", cached" : ""
         );
 
-        var dtos = ConvertMetasToDtos(metas);
         var paged = dtos.Skip(start).Take(limit).ToArray();
 
         ctx.Result = new OkObjectResult(
@@ -113,7 +173,8 @@ public class SearchActionFilter(
         string searchTerm,
         HashSet<BaseItemKind> requestedTypes,
         PluginConfiguration cfg,
-        Guid userId
+        Guid userId,
+        CancellationToken ct
     )
     {
         var tasks = new List<Task<IReadOnlyList<StremioMeta>>>();
@@ -126,7 +187,7 @@ public class SearchActionFilter(
 
         if (requestedTypes.Contains(BaseItemKind.Movie) && movieFolder is not null)
         {
-            tasks.Add(SearchAnyLanguageAsync(cfg.Stremio!, searchTerm, StremioMediaType.Movie));
+            tasks.Add(SearchAnyLanguageAsync(cfg.Stremio!, searchTerm, StremioMediaType.Movie, ct));
         }
         else if (requestedTypes.Contains(BaseItemKind.Movie))
         {
@@ -137,7 +198,7 @@ public class SearchActionFilter(
 
         if (requestedTypes.Contains(BaseItemKind.Series) && seriesFolder is not null)
         {
-            tasks.Add(SearchAnyLanguageAsync(cfg.Stremio!, searchTerm, StremioMediaType.Series));
+            tasks.Add(SearchAnyLanguageAsync(cfg.Stremio!, searchTerm, StremioMediaType.Series, ct));
         }
         else if (requestedTypes.Contains(BaseItemKind.Series))
         {
@@ -165,17 +226,18 @@ public class SearchActionFilter(
     private static async Task<IReadOnlyList<StremioMeta>> SearchAnyLanguageAsync(
         GelatoStremioProvider stremio,
         string searchTerm,
-        StremioMediaType mediaType
+        StremioMediaType mediaType,
+        CancellationToken ct
     )
     {
-        var direct = stremio.SearchAsync(searchTerm, mediaType);
+        var direct = stremio.SearchAsync(searchTerm, mediaType, ct: ct);
         if (searchTerm.Trim().Length < 3)
             return await direct;
 
-        var titles = await stremio.GetSearchTitlesAsync(searchTerm, mediaType);
+        var titles = await stremio.GetSearchTitlesAsync(searchTerm, mediaType, ct);
         var translated = titles
             .Take(2)
-            .Select(title => stremio.SearchAsync(title, mediaType))
+            .Select(title => stremio.SearchAsync(title, mediaType, ct: ct))
             .ToList();
 
         var merged = new List<StremioMeta>(await direct);
@@ -192,21 +254,29 @@ public class SearchActionFilter(
         return merged;
     }
 
-    private List<BaseItemDto> ConvertMetasToDtos(List<StremioMeta> metas)
+    private List<BaseItemDto> ConvertMetasToDtos(List<StremioMeta> metas, CancellationToken ct)
     {
-        // theres a reason i initally disabled all fields but forgot....
-        // infuse breaks if we do a small subset. Not sure which field it needs. Prolly mediasources
-        var options = new DtoOptions { EnableImages = true, EnableUserData = false };
+        // Infuse breaks on a small subset of fields, so every field is still
+        // sent; only the ones that need the database are filled in here.
+        var options = new DtoOptions(false)
+        {
+            Fields = ResultFields,
+            EnableImages = true,
+            EnableUserData = false,
+        };
 
         var dtos = new List<BaseItemDto>(metas.Count);
 
         foreach (var meta in metas)
         {
+            if (ct.IsCancellationRequested)
+                break;
             var baseItem = manager.IntoBaseItem(meta);
             if (baseItem is null)
                 continue;
 
             var dto = dtoService.GetBaseItemDto(baseItem, options);
+            FillSkippedFields(dto, baseItem);
             var stremioUri = StremioUri.FromBaseItem(baseItem);
             dto.Id = stremioUri.ToGuid();
             dtos.Add(dto);
@@ -215,5 +285,31 @@ public class SearchActionFilter(
         }
 
         return dtos;
+    }
+
+    // What Jellyfin returns for these fields on an item that is not saved.
+    public static void FillSkippedFields(BaseItemDto dto, BaseItem item)
+    {
+        dto.SpecialFeatureCount = 0;
+        dto.LocalTrailerCount = 0;
+        dto.Chapters = [];
+        if (item is Video)
+        {
+            dto.MediaStreams = [];
+            dto.MediaSources =
+            [
+                new MediaSourceInfo
+                {
+                    Protocol = MediaProtocol.Http,
+                    Id = item.Id.ToString("N"),
+                    Path = item.Path,
+                    Type = MediaSourceType.Default,
+                    Name = item.Name,
+                    VideoType = VideoType.VideoFile,
+                    IsRemote = false,
+                    MediaStreams = [],
+                },
+            ];
+        }
     }
 }
