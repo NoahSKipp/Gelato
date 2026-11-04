@@ -9,8 +9,8 @@
     "versions": [
       {
         "changelog": "## [0.26.25.1] - 2026-11-04\n\n### 🐛 Bug Fixes\n\n- *(compat)* Load on Jellyfin 12.1 and later as well as 12.0\n\n### 📚 Documentation\n\n- Search timings before and after, and a script to repeat them\n\n### ⚡ Performance\n\n- *(search)* Stop asking the database about every search result\n- *(prefetch)* Queue prefetch inserts behind the other background writers\n",
-        "checksum": "",
-        "sourceUrl": "",
+        "checksum": "153fbac58fafc9dd4177a91e33151810",
+        "sourceUrl": "https://github.com/NoahSKipp/Gelato/releases/download/v0.26.25.1/gelato_0.26.25.1.zip",
         "targetAbi": "12.0.0.0",
         "timestamp": "2026-11-04T12:20:39Z",
         "version": "0.26.25.1"
