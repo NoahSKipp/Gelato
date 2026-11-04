@@ -494,6 +494,33 @@ public sealed class GelatoManager(
         }
     }
 
+    // One delete for the whole batch instead of a transaction per row.
+    private void DeleteStreamRows(IReadOnlyCollection<BaseItem> rows)
+    {
+        if (rows.Count == 0)
+            return;
+        try
+        {
+            libraryManager.DeleteItemsUnsafeFast(rows);
+            return;
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Batch delete of {Count} stale streams failed, deleting one by one", rows.Count);
+        }
+        foreach (var row in rows)
+        {
+            try
+            {
+                libraryManager.DeleteItem(row, new DeleteOptions { DeleteFileLocation = false }, false);
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "Failed to delete stale stream {ItemId}", row.Id);
+            }
+        }
+    }
+
     private static string StreamRowState(BaseItem item) =>
         string.Join(
             '\u001f',
@@ -830,30 +857,18 @@ public sealed class GelatoManager(
             .Where(item => item.GelatoData<List<Guid>>("userIds") is { Count: 0 })
             .ToList();
 
-        // Persist the userId removal for every stale row, orphans included.
-        // This used to save only the rows other users still held, while the
-        // orphans' delete was commented out, so the removal never reached the
-        // database: a stale row kept this user and stayed in the stream list
-        // for good. Saving all of them hides them from the list right away.
-        await SaveInBatchesAsync(stale, ct).ConfigureAwait(false);
+        // Orphans dropped in this sync are not saved first; every other stale
+        // row is, so it leaves this user's list right away (orphans past the
+        // per-sync delete cap included). A sync that replaced all 40 rows
+        // used to write 80.
+        var deleting = toDelete.Take(MaxStaleDeletesPerSync).ToList();
+        var deletingIds = deleting.Select(x => x.Id).ToHashSet();
+        var staleToSave = stale.Where(x => !deletingIds.Contains(x.Id)).ToList();
+        await SaveInBatchesAsync(staleToSave, ct).ConfigureAwait(false);
 
         // Then drop orphans, a bounded batch per sync so a title with a large
         // backlog doesn't stall the sync the reader is waiting on.
-        foreach (var staleItem in toDelete.Take(MaxStaleDeletesPerSync))
-        {
-            try
-            {
-                libraryManager.DeleteItem(
-                    staleItem,
-                    new DeleteOptions { DeleteFileLocation = false },
-                    false
-                );
-            }
-            catch (Exception ex)
-            {
-                _log.LogWarning(ex, "Failed to delete stale stream {ItemId}", staleItem.Id);
-            }
-        }
+        DeleteStreamRows(deleting);
 
         _log.LogDebug(
             "SyncStreams stale rows GelatoId={Id}: existing={Existing} stale={Stale} orphaned={Orphaned}",
