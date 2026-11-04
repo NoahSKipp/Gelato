@@ -61,18 +61,19 @@ public class GelatoStremioProvider(
 
     private async Task<T?> GetJsonAsync<T>(string url)
     {
-        log.LogDebug("GetJsonAsync: requesting {Url}", url);
+        var shown = Services.JsonText.RedactAddonUrl(url, baseUrl);
+        log.LogDebug("GetJsonAsync: requesting {Url}", shown);
 
         try
         {
             var c = NewClient();
-            var resp = await c.GetAsync(url).ConfigureAwait(false); // No using statement
+            using var resp = await c.GetAsync(url).ConfigureAwait(false);
 
             if (!resp.IsSuccessStatusCode)
             {
                 log.LogWarning(
                     "GetJsonAsync: request failed for {Url} with {StatusCode} {ReasonPhrase}",
-                    url,
+                    shown,
                     resp.StatusCode,
                     resp.ReasonPhrase
                 );
@@ -84,12 +85,25 @@ public class GelatoStremioProvider(
                 );
             }
 
-            await using var s = await resp.Content.ReadAsStreamAsync().ConfigureAwait(false);
-            return await JsonSerializer.DeserializeAsync<T>(s, JsonOpts).ConfigureAwait(false);
+            var body = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
+            try
+            {
+                return JsonSerializer.Deserialize<T>(body, JsonOpts);
+            }
+            catch (JsonException)
+            {
+                // Raw line breaks inside strings: parse the escaped text once,
+                // no new request.
+                var cleaned = Services.JsonText.EscapeControlCharsInStrings(body);
+                if (ReferenceEquals(cleaned, body))
+                    throw;
+                log.LogDebug("GetJsonAsync: escaped control characters in {Url}", shown);
+                return JsonSerializer.Deserialize<T>(cleaned, JsonOpts);
+            }
         }
         catch (Exception ex)
         {
-            log.LogError(ex, "GetJsonAsync: error fetching or parsing {Url}", url);
+            log.LogError("GetJsonAsync: error fetching or parsing {Url}: {Error}", shown, ex.Message);
             throw;
         }
     }
