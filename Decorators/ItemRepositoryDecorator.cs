@@ -11,7 +11,7 @@ using Microsoft.AspNetCore.Http;
 
 namespace Gelato.Decorators;
 
-public sealed class GelatoItemRepository(IItemRepository inner, IHttpContextAccessor http)
+public class GelatoItemRepository(IItemRepository inner, IHttpContextAccessor http)
     : IItemRepository
 {
     private static readonly BaseItemKind[] ListScopeMediaKinds =
@@ -157,6 +157,29 @@ public sealed class GelatoItemRepository(IItemRepository inner, IHttpContextAcce
     public IReadOnlyList<string> GetStudioNames() => inner.GetStudioNames();
 
     public IReadOnlyList<string> GetGenreNames() => inner.GetGenreNames();
+
+    // Jellyfin 12.1 added IItemRepository.GetTagNames. This build compiles
+    // against 12.0, where it does not exist: a public method with its
+    // signature still implements it on 12.1 and later (interface methods
+    // are matched when the type loads), and the call into the inner
+    // repository is bound once here when the running Jellyfin has it. It has
+    // to be virtual: the runtime only maps interface methods onto virtual
+    // ones, and the compiler only makes it virtual by itself when it knows
+    // the interface member (which is why the class is not sealed).
+    private static readonly System.Reflection.MethodInfo? InnerGetTagNames = typeof(IItemRepository).GetMethod(
+        "GetTagNames",
+        [typeof(InternalItemsQuery)]
+    );
+
+    private readonly Func<InternalItemsQuery, IReadOnlyList<string>>? _getTagNames =
+        InnerGetTagNames?.CreateDelegate<Func<InternalItemsQuery, IReadOnlyList<string>>>(inner);
+
+    // Gelato's own markers on its rows are not tags anyone filters by.
+    private static readonly string[] InternalTags = [GelatoManager.StreamTag, GelatoManager.TreeSyncedTag];
+
+    public virtual IReadOnlyList<string> GetTagNames(InternalItemsQuery filter) =>
+        _getTagNames?.Invoke(filter).Where(t => !InternalTags.Contains(t, StringComparer.OrdinalIgnoreCase)).ToList()
+        ?? [];
 
     public IReadOnlyList<string> GetMediaStreamLanguages(
         InternalItemsQuery filter,
