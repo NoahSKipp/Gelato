@@ -8,6 +8,14 @@
     "owner": "lstb1t",
     "versions": [
       {
+        "changelog": "## [0.26.25.1] - 2026-11-04\n\n### 🐛 Bug Fixes\n\n- *(compat)* Load on Jellyfin 12.1 and later as well as 12.0\n\n### 📚 Documentation\n\n- Search timings before and after, and a script to repeat them\n\n### ⚡ Performance\n\n- *(search)* Stop asking the database about every search result\n- *(prefetch)* Queue prefetch inserts behind the other background writers\n",
+        "checksum": "",
+        "sourceUrl": "",
+        "targetAbi": "12.0.0.0",
+        "timestamp": "2026-11-04T12:20:39Z",
+        "version": "0.26.25.1"
+      },
+      {
         "changelog": "## [0.26.25.0] - 2026-11-04\n\n### 🚀 Features\n\n- *(db)* One shared gate for Gelato's background writers\n\n### 🐛 Bug Fixes\n\n- *(playback)* Probe streams with the probe provider, not a full refresh\n- *(library)* Survive item queries from a task started by a finished request\n- *(addons)* Parse addon JSON with raw line breaks and keep addon URLs out of logs\n- *(streams)* Sync again after Purge streams instead of failing Play for an hour\n\n### 📚 Documentation\n\n- Database contention findings and a test to repeat on a copy of the server\n\n### ⚡ Performance\n\n- *(images)* Rewrite an image sidecar only when its address changed\n- *(streams)* Delete stale stream rows in one go and stop saving them first\n",
         "checksum": "607aad8eec2aaf5ec0fc3008d3200c12",
         "sourceUrl": "https://github.com/NoahSKipp/Gelato/releases/download/v0.26.25.0/gelato_0.26.25.0.zip",
