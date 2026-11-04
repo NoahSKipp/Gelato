@@ -134,6 +134,11 @@ public sealed class GelatoManager(
             cache.Compact(1.0);
         }
 
+        // The sync markers outlive a restart; after a purge they would mark
+        // titles with no stream rows left as synced, and Play found nothing
+        // to play until they expired.
+        _streamSyncs.RemoveWhere((_, _) => true);
+
         _log.LogDebug("Cache cleared");
     }
 

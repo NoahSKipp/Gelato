@@ -1126,6 +1126,17 @@ public sealed class MediaSourceManagerDecorator(
 
     private async Task<bool> ProbeStreamAsync(Video owner, string streamUrl, CancellationToken ct)
     {
+        // A title with no stream rows left (after a purge) offers its own
+        // gelato:// stub, which ffprobe cannot open.
+        if (
+            !Uri.TryCreate(streamUrl, UriKind.Absolute, out var probeUri)
+            || (probeUri.Scheme != Uri.UriSchemeHttp && probeUri.Scheme != Uri.UriSchemeHttps)
+        )
+        {
+            _log.LogDebug("Not probing {Id}: no stream address", owner.Id);
+            return false;
+        }
+
         var gelatoFilename = owner.GelatoData<string>("filename");
         var strmBaseName = !string.IsNullOrEmpty(gelatoFilename)
             ? Path.GetFileNameWithoutExtension(gelatoFilename)
