@@ -26,6 +26,9 @@ public class PluginConfiguration : BasePluginConfiguration
     public bool CreateCollections { get; set; } = false;
     public int MaxCollectionItems { get; set; } = 100;
     public bool DisableSearch { get; set; } = false;
+
+    /// <summary>Search on TMDB directly instead of through the addon's search catalog (which stays the fallback).</summary>
+    public bool SearchWithTmdb { get; set; } = true;
     public bool EnableJavaScriptInjection { get; set; } = false;
     public bool LazyImages { get; set; } = false;
 
@@ -142,6 +145,7 @@ public class UserConfig
             ExtendLocalSeriesTrees = baseConfig.ExtendLocalSeriesTrees,
             FilterUnreleased = baseConfig.FilterUnreleased,
             FilterUnreleasedBufferDays = baseConfig.FilterUnreleasedBufferDays,
+            SearchWithTmdb = baseConfig.SearchWithTmdb,
             DisableSourceCount = baseConfig.DisableSourceCount,
             P2PEnabled = baseConfig.P2PEnabled,
             P2PDLSpeed = baseConfig.P2PDLSpeed,

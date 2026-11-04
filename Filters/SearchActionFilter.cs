@@ -17,6 +17,8 @@ namespace Gelato.Filters;
 public class SearchActionFilter(
     IDtoService dtoService,
     GelatoManager manager,
+    TmdbSearch tmdb,
+    MediaBrowser.Controller.Configuration.IServerConfigurationManager serverConfig,
     ILogger<SearchActionFilter> log
 ) : IAsyncActionFilter, IOrderedFilter
 {
@@ -133,6 +135,16 @@ public class SearchActionFilter(
         );
     }
 
+    // TMDB answers in the server's metadata language, e.g. de-DE.
+    private string MetadataLanguage()
+    {
+        var c = serverConfig.Configuration;
+        var lang = string.IsNullOrWhiteSpace(c.PreferredMetadataLanguage) ? "en" : c.PreferredMetadataLanguage;
+        return string.IsNullOrWhiteSpace(c.MetadataCountryCode) || lang.Contains('-')
+            ? lang
+            : lang + "-" + c.MetadataCountryCode.ToUpperInvariant();
+    }
+
     private HashSet<BaseItemKind> GetRequestedItemTypes(ActionExecutingContext ctx)
     {
         var requested = new HashSet<BaseItemKind>([BaseItemKind.Movie, BaseItemKind.Series]);
@@ -185,6 +197,24 @@ public class SearchActionFilter(
         // Keep hot config in sync for subsequent searches in this request window.
         cfg.MovieFolder = movieFolder;
         cfg.SeriesFolder = seriesFolder;
+
+        var wantMovies = requestedTypes.Contains(BaseItemKind.Movie) && movieFolder is not null;
+        var wantSeries = requestedTypes.Contains(BaseItemKind.Series) && seriesFolder is not null;
+        if (cfg.SearchWithTmdb && (wantMovies || wantSeries))
+        {
+            var found = await tmdb.SearchAsync(searchTerm, wantMovies, wantSeries, MetadataLanguage(), ct);
+            ct.ThrowIfCancellationRequested();
+            log.LogInformation(
+                "Search \"{Query}\" on TMDB: {Timings}{Fallback}",
+                searchTerm,
+                string.Join(", ", found.Timings),
+                found.Ok && found.Metas.Count > 0 ? "" : "; asking the addon instead"
+            );
+            if (found.Ok && found.Metas.Count > 0)
+                return cfg.FilterUnreleased
+                    ? found.Metas.Where(x => x.IsReleased(cfg.FilterUnreleasedBufferDays)).ToList()
+                    : found.Metas;
+        }
 
         if (requestedTypes.Contains(BaseItemKind.Movie) && movieFolder is not null)
         {

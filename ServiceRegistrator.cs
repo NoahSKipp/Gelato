@@ -46,6 +46,7 @@ public class ServiceRegistrator : IPluginServiceRegistrator
         services.AddSingleton<WarmupGate>();
         services.AddSingleton<ProbeGate>();
         services.AddSingleton<BackgroundWriteGate>();
+        services.AddSingleton<TmdbSearch>();
         services.DecorateSingle<IItemRepository, GelatoItemRepository>();
         services.AddSingleton(sp => (GelatoItemRepository)sp.GetRequiredService<IItemRepository>());
         services.AddSingleton<GelatoStremioProviderFactory>();

@@ -63,3 +63,38 @@ Read only; a search writes nothing.
 It prints, per term, the result count, the first answer's time and the
 repeat (from the cache). The server log line above has the addon and
 item split.
+
+## Searching on TMDB instead of the addon
+
+On the live server the addon's own search was the cost: the self-hosted
+tmdb-addon behind AIOStreams takes 2.1 to 4.4 s for a movie search, 3.9 s
+(1.7 MB) for a series search, and anything from 0.4 to 10 s through
+AIOStreams. Gelato sends the movie and the series catalog request at the
+same moment (on the bench both start at +0.00 s and end at +2.50 s with
+a 2.5 s addon), so a search that costs the sum of the two on the live
+server is being queued behind Gelato, in AIOStreams or the addon.
+
+Gelato now searches TMDB itself ("Search on TMDB directly", on by
+default): movies (two pages) and TV (one page) in parallel, in the
+server's metadata language, each hit resolved to its IMDb id (16 at a
+time, kept for a week), so results are the same tt ids, the same items
+and the same streams as before. Hits without an IMDb id are left out
+(nothing could be streamed for them). When TMDB fails or finds nothing,
+the addon's search catalog answers as before. The 60 s search cache is
+unchanged.
+
+    Search "Heat" on TMDB: movie page 1 152 ms (20), tv page 1 151 ms (20), movie page 2 152 ms (20), imdb ids 330 ms (57 of 60, 0 cached)
+
+Bench server (addon search 2.5 s per request, TMDB mock 150 ms per
+search and 80 ms per id lookup):
+
+| Search | Before | TMDB, first time | TMDB, ids known | TMDB down |
+| --- | --- | --- | --- | --- |
+| Alien | 2.68 s | 0.76 s | 0.27 s | 2.66 s (addon) |
+| The Batman | 2.54 s | 0.75 s | | |
+| Heat | 2.65 s | 0.78 s | 0.35 s | |
+| Die Verurteilten | 2.54 s | 0.81 s | | |
+
+A TMDB result opens and plays like an addon result: the movie got its
+item with 15 sources, PlaybackInfo 200 and a playing stream; the series
+opened with its 8 seasons.

@@ -237,7 +237,7 @@ public class GelatoStremioProvider(
     /// Uses the TMDB API key from the Jellyfin TMDB plugin if configured, otherwise falls back
     /// to the built-in default key.
     /// </summary>
-    private static string GetTmdbApiKey()
+    public static string GetTmdbApiKey()
     {
         const string defaultKey = "4219e299c89411838049ab0dab19ebd5";
         try
