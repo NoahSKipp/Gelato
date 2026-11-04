@@ -48,7 +48,7 @@ public sealed class MediaSourceManagerDecorator(
     Lazy<GelatoManager> manager,
     Lazy<SubtitleProvider> subtitleProvider,
     IMediaSegmentManager mediaSegmentManager,
-    IEnumerable<ICustomMetadataProvider<Video>> videoProbeProviders,
+    Lazy<ProviderManagerDecorator> providerManager,
     BadStreamStore badStreams,
     WarmTracker warm,
     ProbeGate probeGate
@@ -71,8 +71,32 @@ public sealed class MediaSourceManagerDecorator(
     private readonly Lazy<SubtitleProvider> _subtitleProvider = subtitleProvider;
 
     //  private readonly Lazy<ISubtitleManager> _subtitleManager = subtitleManager ?? throw new ArgumentNullException(nameof(subtitleManager));
-    private readonly ICustomMetadataProvider<Video>? _probeProvider =
-        videoProbeProviders.FirstOrDefault(p => p.Name == "Probe Provider");
+    // Jellyfin builds its metadata providers by reflection, not through DI, so
+    // an injected IEnumerable of them is always empty: ask the provider
+    // manager instead. Without it every probe ran the whole metadata
+    // pipeline, remote lookups included.
+    private ICustomMetadataProvider<Video>? _probeProvider;
+
+    private ICustomMetadataProvider<Video>? GetProbeProvider(Video owner)
+    {
+        if (_probeProvider is not null)
+            return _probeProvider;
+        try
+        {
+            var options = _libraryManager.GetLibraryOptions(owner);
+            IEnumerable<IMetadataProvider> providers = owner is Episode
+                ? providerManager.Value.GetMetadataProviders<Episode>(owner, options, true)
+                : providerManager.Value.GetMetadataProviders<MediaBrowser.Controller.Entities.Movies.Movie>(owner, options, true);
+            _probeProvider = providers
+                .OfType<ICustomMetadataProvider<Video>>()
+                .FirstOrDefault(p => p.Name == "Probe Provider");
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Could not resolve the probe provider");
+        }
+        return _probeProvider;
+    }
 
     // Item details only list the first sources unless the caller asks for
     // MediaSources explicitly (Jellio's stream picker does).
@@ -1120,7 +1144,7 @@ public sealed class MediaSourceManagerDecorator(
                 MetadataRefreshMode = MetadataRefreshMode.FullRefresh,
             };
 
-            if (_probeProvider is not null)
+            if (GetProbeProvider(owner) is { } probeProvider)
             {
                 // Call the ffprobe provider directly instead of going through
                 // RefreshMetadata.
@@ -1140,14 +1164,13 @@ public sealed class MediaSourceManagerDecorator(
                 // UpdateToRepositoryAsync and runs segment providers itself, so
                 // no other part of the pipeline is needed.
                 //
-                // This field was already injected upstream and never used.
-                await _probeProvider.FetchAsync(owner, options, ct).ConfigureAwait(false);
+                await probeProvider.FetchAsync(owner, options, ct).ConfigureAwait(false);
             }
             else
             {
                 // No probe provider resolved - fall back to the old path rather
                 // than silently skipping the probe.
-                _log.LogDebug("No probe provider available, falling back to RefreshMetadata");
+                _log.LogWarning("No probe provider available, falling back to RefreshMetadata");
                 await owner.RefreshMetadata(options, ct).ConfigureAwait(false);
             }
             return true;
