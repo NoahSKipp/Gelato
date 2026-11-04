@@ -2,6 +2,11 @@ name: Release
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Complete a release that failed part way: the version already in the version file (leave empty for a normal release)"
+        required: false
+        default: ""
 
 jobs:
   release:
@@ -28,4 +33,5 @@ jobs:
       - name: Run make release
         run: make release
         env:
+          VERSION: ${{ inputs.version }}
           GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
