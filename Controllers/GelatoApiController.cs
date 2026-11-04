@@ -42,6 +42,7 @@ public sealed class GelatoApiController : ControllerBase
     private readonly WarmTracker _warm;
     private readonly NzbdavPresence _nzbdav;
     private readonly WarmupGate _gate;
+    private readonly BackgroundWriteGate _writeGate;
     private readonly string _downloadPath;
 
     private static readonly SlidingWindowLimiter BatchLimiter = new(
@@ -66,12 +67,14 @@ public sealed class GelatoApiController : ControllerBase
         ISubtitleEncoder subtitleEncoder,
         WarmTracker warm,
         NzbdavPresence nzbdav,
-        WarmupGate gate
+        WarmupGate gate,
+        BackgroundWriteGate writeGate
     )
     {
         _warm = warm;
         _nzbdav = nzbdav;
         _gate = gate;
+        _writeGate = writeGate;
         _log = log;
         _gelatoManager = gelatoManager;
         _libraryManager = libraryManager;
@@ -483,9 +486,19 @@ public sealed class GelatoApiController : ControllerBase
                 return null;
             }
 
-            var inserted = await _insertActionFilter
-                .InsertMetaAsync(itemId, root, meta, user)
-                .ConfigureAwait(false);
+            // Nobody waits on a prefetch: its insert queues behind the other
+            // background writers (a series builds its whole episode tree).
+            BaseItem? inserted;
+            using (
+                await _writeGate
+                    .EnterAsync("Prefetch insert", CancellationToken.None, heavy: isSeries)
+                    .ConfigureAwait(false)
+            )
+            {
+                inserted = await _insertActionFilter
+                    .InsertMetaAsync(itemId, root, meta, user)
+                    .ConfigureAwait(false);
+            }
             if (inserted is not null)
             {
                 _gelatoManager.RemoveStremioMeta(itemId);
