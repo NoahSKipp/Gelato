@@ -63,8 +63,18 @@ public sealed class GelatoItemRepository(IItemRepository inner, IHttpContextAcce
         }
 
         var ctx = _http.HttpContext;
-        var isListingIntent =
-            ctx is not null && (ctx.IsApiListing() || ctx.IsHomeScreenSectionListing());
+        bool isListingIntent;
+        try
+        {
+            isListingIntent =
+                ctx is not null && (ctx.IsApiListing() || ctx.IsHomeScreenSectionListing());
+        }
+        catch (ObjectDisposedException)
+        {
+            // Work started by a request (a task run from the dashboard) keeps
+            // its context after the request has finished.
+            isListingIntent = false;
+        }
         if (!isListingIntent)
             return filter;
 
