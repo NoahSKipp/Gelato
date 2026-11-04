@@ -621,7 +621,8 @@ public sealed class GelatoManager(
 
         if (video.IsStream())
         {
-            _log.LogWarning("SyncStreams: item is a stream, skipping");
+            // Its streams belong to its title; callers pass the title.
+            _log.LogDebug("SyncStreams: item is a stream, skipping");
             return 0;
         }
 

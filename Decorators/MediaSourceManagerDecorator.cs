@@ -216,7 +216,7 @@ public sealed class MediaSourceManagerDecorator(
             return;
         _log.Log(
             level,
-            "{Name} {Id}: {Built}/{Total} sources in {Total}ms (sync {Sync}ms, query {Query}ms, build {Build}ms)",
+            "{Name} {Id}: {Built}/{Total} sources in {Ms}ms (sync {Sync}ms, query {Query}ms, build {Build}ms)",
             name,
             item.Id,
             built,
@@ -273,7 +273,9 @@ public sealed class MediaSourceManagerDecorator(
         var streams = LoadStreamItems(item, userId);
         var query = sw.ElapsedMilliseconds;
 
-        if (allowSync && uri is not null && !manager.HasStreamSync(cacheKey))
+        // A stream row's streams are its title's: syncing the row itself only
+        // ever logged "item is a stream" on every stream request.
+        if (allowSync && uri is not null && !item.IsStream() && !manager.HasStreamSync(cacheKey))
         {
             // Bug in web UI that calls the detail page twice. So that's why there's a lock.
             // With stored streams nobody waits on the refresh, so it queues
