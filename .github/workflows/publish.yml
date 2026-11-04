@@ -13,9 +13,21 @@ on:
       # matches more than one listed type into a single run).
       - published
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to regenerate the repository entry for (default: the latest release)"
+        required: false
+        default: ""
 
 permissions:
   contents: write
+
+# A plain release fires both released and published, so two runs start
+# for one tag. They now run one after the other: the second one finds the
+# assets already attached and only regenerates the manifest.
+concurrency:
+  group: publish-${{ github.event.release.tag_name || inputs.tag || github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -39,25 +51,37 @@ jobs:
             sha256sum ${file#./} >> ${file%.*}.sha256
           done
           ls -l
+      - name: Check for assets from an earlier run
+        id: existing
+        if: github.event_name == 'release'
+        run: |
+          names=$(gh api "repos/${{ github.repository }}/releases/tags/${{ github.event.release.tag_name }}" --jq '.assets[].name')
+          if echo "$names" | grep -q '\.zip$' && echo "$names" | grep -q '\.md5$'; then
+            echo "Zip and md5 already attached, not uploading again."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Upload GitHub Release assets
+        if: github.event_name == 'release' && steps.existing.outputs.skip != 'true'
         uses: shogo82148/actions-upload-release-asset@v1.9.0
         with:
           upload_url: ${{ github.event.release.upload_url }}
           asset_path: ./*
-          # A plain, immediate (non-draft) release fires both released and
-          # published (confirmed live on v0.26.18.0's own run), so this job
-          # runs twice for the same release. The first run's own upload
-          # always wins; without this the second just fails outright on
-          # "file name already exists" instead of finishing as the no-op
-          # it actually is.
-          overwrite: true
   generate:
     runs-on: ubuntu-latest
     needs:
       - upload
     steps:
-      - name: Jellyfin plugin repo
-        uses: Kevinjil/jellyfin-plugin-repo-action@v0.4.3
-        with:
-          githubToken: ${{ secrets.GITHUB_TOKEN }}
-          repository: ${{ github.repository }}
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Regenerate the plugin repository
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || pip install --quiet --break-system-packages pyyaml
+          tag="${{ github.event.release.tag_name || inputs.tag }}"
+          [ -n "$tag" ] || tag=$(gh api "repos/${{ github.repository }}/releases/latest" --jq .tag_name)
+          python3 scripts/plugin-repository.py generate --tag "$tag"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
