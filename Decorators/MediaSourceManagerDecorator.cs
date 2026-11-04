@@ -276,9 +276,12 @@ public sealed class MediaSourceManagerDecorator(
         if (allowSync && uri is not null && !manager.HasStreamSync(cacheKey))
         {
             // Bug in web UI that calls the detail page twice. So that's why there's a lock.
+            // With stored streams nobody waits on the refresh, so it queues
+            // like any background writer; with none the viewer waits on it.
+            var background = streams.Count > 0;
             var sync = _lock.RunSingleFlightAsync(
                 item.Id,
-                ct => RefreshStreamsAsync(item, uri, userId, cacheKey, ct)
+                ct => RefreshStreamsAsync(item, uri, userId, cacheKey, background, ct)
             );
 
             if (streams.Count == 0)
@@ -352,6 +355,7 @@ public sealed class MediaSourceManagerDecorator(
         StremioUri uri,
         Guid userId,
         string cacheKey,
+        bool background,
         CancellationToken ct
     )
     {
@@ -386,7 +390,9 @@ public sealed class MediaSourceManagerDecorator(
 
         try
         {
-            var count = await _manager.Value.SyncStreams(item, userId, ct).ConfigureAwait(false);
+            var count = await _manager
+                .Value.SyncStreams(item, userId, ct, background)
+                .ConfigureAwait(false);
             if (count > 0)
             {
                 _manager.Value.SetStreamSync(cacheKey);

@@ -32,7 +32,8 @@ public sealed class GelatoManager(
     IServerConfigurationManager serverConfig,
     ILibraryManager libraryManager,
     IDirectoryService directoryService,
-    IApplicationPaths appPaths
+    IApplicationPaths appPaths,
+    BackgroundWriteGate writeGate
 )
 {
     public const string StreamTag = "gelato-stream";
@@ -45,7 +46,17 @@ public sealed class GelatoManager(
         Path.Combine(GelatoPlugin.Instance!.DataFolderPath, "stream-sync.json")
     );
 
-    private readonly ConcurrentDictionary<string, Lazy<Task<int>>> _syncsInFlight = new();
+    private sealed class SyncFlight
+    {
+        public Lazy<Task<int>> Run { get; set; } = null!;
+
+        // Set when someone waits on the result, so a background sync stops
+        // queueing behind other background writers.
+        public TaskCompletionSource Promote { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    private readonly ConcurrentDictionary<string, SyncFlight> _syncsInFlight = new();
     public const string TreeSyncedTag = "gelato-tree-synced";
 
     /// <summary>
@@ -546,26 +557,37 @@ public sealed class GelatoManager(
     // One sync per user and title at a time, whoever asks (Play, the detail
     // page, a prefetch): parallel syncs of one title each inserted rows and
     // fought over SQLite's write lock.
-    public Task<int> SyncStreams(BaseItem item, Guid userId, CancellationToken ct)
+    // background: nobody is waiting on this sync (prefetch, warm-up, a
+    // refresh behind stored streams), so its writes queue behind the other
+    // background writers and the guide import.
+    public Task<int> SyncStreams(BaseItem item, Guid userId, CancellationToken ct, bool background = false)
     {
         var key = $"{userId:N}:{item.Id:N}";
-        var lazy = _syncsInFlight.GetOrAdd(
+        var flight = _syncsInFlight.GetOrAdd(
             key,
-            _ => new Lazy<Task<int>>(
-                () => RunSyncStreams(key, item, userId),
-                LazyThreadSafetyMode.ExecutionAndPublication
-            )
+            _ =>
+            {
+                var f = new SyncFlight();
+                var promoted = background ? f.Promote.Task : null;
+                f.Run = new Lazy<Task<int>>(
+                    () => RunSyncStreams(key, item, userId, promoted),
+                    LazyThreadSafetyMode.ExecutionAndPublication
+                );
+                return f;
+            }
         );
-        return lazy.Value;
+        if (!background)
+            flight.Promote.TrySetResult();
+        return flight.Run.Value;
     }
 
-    private async Task<int> RunSyncStreams(string key, BaseItem item, Guid userId)
+    private async Task<int> RunSyncStreams(string key, BaseItem item, Guid userId, Task? promoted)
     {
         try
         {
             // Not the first caller's token: one aborted request must not
             // leave a half-written stream list for the others.
-            return await SyncStreamsCore(item, userId, CancellationToken.None)
+            return await SyncStreamsCore(item, userId, CancellationToken.None, promoted)
                 .ConfigureAwait(false);
         }
         finally
@@ -574,7 +596,12 @@ public sealed class GelatoManager(
         }
     }
 
-    private async Task<int> SyncStreamsCore(BaseItem item, Guid userId, CancellationToken ct)
+    private async Task<int> SyncStreamsCore(
+        BaseItem item,
+        Guid userId,
+        CancellationToken ct,
+        Task? promoted
+    )
     {
         _log.LogDebug($"SyncStreams for {item.Id}");
         var stopwatch = Stopwatch.StartNew();
@@ -834,6 +861,12 @@ public sealed class GelatoManager(
             }
         }
 
+        var fetched = stopwatch.ElapsedMilliseconds;
+        using var lease = promoted is null
+            ? null
+            : await writeGate.EnterAsync("SyncStreams", ct, promoted, heavy: false).ConfigureAwait(false);
+        var writeStarted = stopwatch.ElapsedMilliseconds;
+
         // Unchanged rows are not rewritten: a resync of a 60 stream title used
         // to update every row and hold the write lock for all of them.
         await SaveInBatchesAsync(changedStreams, ct).ConfigureAwait(false);
@@ -882,7 +915,17 @@ public sealed class GelatoManager(
         stopwatch.Stop();
 
         _log.LogInformation(
-            $"SyncStreams finished GelatoId={uri.ExternalId} userId={userId} duration={Math.Round(stopwatch.Elapsed.TotalSeconds, 1)}s streams={upsertedStreams.Count - 1} written={changedStreams.Count + stale.Count} adopted={adopted} deleted={Math.Min(toDelete.Count, MaxStaleDeletesPerSync)}"
+            "SyncStreams finished GelatoId={GelatoId} userId={UserId} duration={Duration}s fetch={FetchMs}ms wait={WaitMs}ms write={WriteMs}ms streams={Streams} written={Written} adopted={Adopted} deleted={Deleted}",
+            uri.ExternalId,
+            userId,
+            Math.Round(stopwatch.Elapsed.TotalSeconds, 1),
+            fetched,
+            writeStarted - fetched,
+            stopwatch.ElapsedMilliseconds - writeStarted,
+            upsertedStreams.Count - 1,
+            changedStreams.Count + staleToSave.Count,
+            adopted,
+            deleting.Count
         );
 
         return acceptable.Count;
@@ -1373,7 +1416,17 @@ public sealed class GelatoManager(
             if (!chunkResults.IsEmpty)
             {
                 var toSave = chunkResults.ToList();
-                persistence.SaveItems(toSave, cancellationToken);
+                await writeGate
+                    .RunAsync(
+                        "Release date sync",
+                        () =>
+                        {
+                            persistence.SaveItems(toSave, cancellationToken);
+                            return Task.CompletedTask;
+                        },
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false);
                 totalSaved += toSave.Count;
             }
         }
@@ -1460,11 +1513,17 @@ public sealed class GelatoManager(
                     if (meta is not null)
                     {
                         var isLocal = !series.IsGelato();
-                        await SyncSeriesTreesAsync(
-                                cfg,
-                                meta,
-                                ct,
-                                existingSeries: isLocal ? series : null
+                        await writeGate
+                            .RunAsync(
+                                "Series tree sync",
+                                () =>
+                                    SyncSeriesTreesAsync(
+                                        cfg,
+                                        meta,
+                                        ct,
+                                        existingSeries: isLocal ? series : null
+                                    ),
+                                ct
                             )
                             .ConfigureAwait(false);
                     }
@@ -1498,7 +1557,7 @@ public sealed class GelatoManager(
         }
         else
         {
-            CleanVirtualTreeItems(cancellationToken);
+            await CleanVirtualTreeItemsAsync(cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -1541,12 +1600,21 @@ public sealed class GelatoManager(
                 var meta = await stremio.GetMetaAsync(series).ConfigureAwait(false);
                 if (meta is not null)
                 {
-                    await SyncSeriesTreesAsync(cfg, meta, ct, existingSeries: series)
-                        .ConfigureAwait(false);
+                    await writeGate
+                        .RunAsync(
+                            "Series tree sync",
+                            async () =>
+                            {
+                                await SyncSeriesTreesAsync(cfg, meta, ct, existingSeries: series)
+                                    .ConfigureAwait(false);
 
-                    // Mark as synced so we skip on future runs
-                    series.Tags = [.. (series.Tags ?? []), TreeSyncedTag];
-                    persistence.SaveItems([series], ct);
+                                // Mark as synced so we skip on future runs
+                                series.Tags = [.. (series.Tags ?? []), TreeSyncedTag];
+                                persistence.SaveItems([series], ct);
+                            },
+                            ct
+                        )
+                        .ConfigureAwait(false);
                 }
             }
             catch (Exception ex)
@@ -1657,7 +1725,7 @@ public sealed class GelatoManager(
         persistence.SaveItems([series], ct);
     }
 
-    private void CleanVirtualTreeItems(CancellationToken ct)
+    private async Task CleanVirtualTreeItemsAsync(CancellationToken ct)
     {
         var localSeries = libraryManager
             .GetItemList(new InternalItemsQuery { IncludeItemTypes = [BaseItemKind.Series] })
@@ -1668,7 +1736,17 @@ public sealed class GelatoManager(
         foreach (var series in localSeries)
         {
             ct.ThrowIfCancellationRequested();
-            CleanVirtualTreeItem(series, ct);
+            await writeGate
+                .RunAsync(
+                    "Series tree cleanup",
+                    () =>
+                    {
+                        CleanVirtualTreeItem(series, ct);
+                        return Task.CompletedTask;
+                    },
+                    ct
+                )
+                .ConfigureAwait(false);
         }
     }
 

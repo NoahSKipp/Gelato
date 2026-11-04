@@ -45,6 +45,7 @@ public class ServiceRegistrator : IPluginServiceRegistrator
         services.AddSingleton<NzbdavPresence>();
         services.AddSingleton<WarmupGate>();
         services.AddSingleton<ProbeGate>();
+        services.AddSingleton<BackgroundWriteGate>();
         services.DecorateSingle<IItemRepository, GelatoItemRepository>();
         services.AddSingleton(sp => (GelatoItemRepository)sp.GetRequiredService<IItemRepository>());
         services.AddSingleton<GelatoStremioProviderFactory>();

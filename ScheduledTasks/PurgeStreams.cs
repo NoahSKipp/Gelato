@@ -9,7 +9,8 @@ namespace Gelato.ScheduledTasks;
 public sealed class PurgeGelatoStreamsTask(
     ILibraryManager libraryManager,
     ILogger<PurgeGelatoStreamsTask> log,
-    GelatoManager manager
+    GelatoManager manager,
+    Gelato.Services.BackgroundWriteGate writeGate
 ) : IScheduledTask
 {
     public string Name => "Purge streams";
@@ -29,7 +30,7 @@ public sealed class PurgeGelatoStreamsTask(
         ];
     }
 
-    public Task ExecuteAsync(IProgress<double> progress, CancellationToken cancellationToken)
+    public async Task ExecuteAsync(IProgress<double> progress, CancellationToken cancellationToken)
     {
         log.LogInformation("purging streams");
 
@@ -53,34 +54,30 @@ public sealed class PurgeGelatoStreamsTask(
 
         var total = streams.Length;
 
-        var done = 0;
-
-        foreach (var item in streams)
+        // Stream rows have no files behind them; a few hundred per delete
+        // instead of a transaction each, one batch at a time.
+        const int batchSize = 200;
+        for (var start = 0; start < total; start += batchSize)
         {
             cancellationToken.ThrowIfCancellationRequested();
-
-            try
+            var batch = streams.Skip(start).Take(batchSize).Cast<BaseItem>().ToList();
+            using (await writeGate.EnterAsync("Purge streams", cancellationToken).ConfigureAwait(false))
             {
-                libraryManager.DeleteItem(
-                    item,
-                    new DeleteOptions { DeleteFileLocation = true },
-                    true
-                );
+                try
+                {
+                    libraryManager.DeleteItemsUnsafeFast(batch);
+                }
+                catch (Exception ex)
+                {
+                    log.LogWarning(ex, "Failed to delete {Count} streams", batch.Count);
+                }
             }
-            catch (Exception ex)
-            {
-                log.LogWarning(ex, "Failed to delete item {ItemId}", item.Id);
-            }
-
-            done++;
-            var pct = Math.Min(100.0, ((double)done / total) * 100.0);
-            progress?.Report(pct);
+            progress?.Report(Math.Min(100.0, 100.0 * (start + batch.Count) / total));
         }
 
         progress?.Report(100.0);
         manager.ClearCache();
 
         log.LogInformation("stream purge completed");
-        return Task.CompletedTask;
     }
 }

@@ -21,6 +21,7 @@ namespace Gelato.Services;
 public sealed class ArtworkBackfillService(
     ILibraryManager libraryManager,
     Lazy<ProviderManagerDecorator> providerManager,
+    BackgroundWriteGate writeGate,
     ILogger<ArtworkBackfillService> log
 )
 {
@@ -104,14 +105,17 @@ public sealed class ArtworkBackfillService(
             await SaveIfMissing(item, ImageType.Logo, logo, cancellationToken).ConfigureAwait(false);
             await SaveIfMissing(item, ImageType.Thumb, thumb, cancellationToken).ConfigureAwait(false);
 
-            if (stored)
+            using (await writeGate.EnterAsync("Artwork backfill", cancellationToken).ConfigureAwait(false))
             {
-                await libraryManager.UpdateImagesAsync(item).ConfigureAwait(false);
-            }
-            else
-            {
-                item.SetProviderId(TriedProviderId, DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
-                await item.UpdateToRepositoryAsync(ItemUpdateType.MetadataEdit, cancellationToken).ConfigureAwait(false);
+                if (stored)
+                {
+                    await libraryManager.UpdateImagesAsync(item).ConfigureAwait(false);
+                }
+                else
+                {
+                    item.SetProviderId(TriedProviderId, DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+                    await item.UpdateToRepositoryAsync(ItemUpdateType.MetadataEdit, cancellationToken).ConfigureAwait(false);
+                }
             }
             return stored;
         }

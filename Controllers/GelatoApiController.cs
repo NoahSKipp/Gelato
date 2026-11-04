@@ -289,7 +289,7 @@ public sealed class GelatoApiController : ControllerBase
         if (!_gelatoManager.HasStreamSync(cacheKey))
         {
             var count = await _gelatoManager
-                .SyncStreams(item, userId, CancellationToken.None)
+                .SyncStreams(item, userId, CancellationToken.None, background: true)
                 .ConfigureAwait(false);
             if (count > 0)
                 _gelatoManager.SetStreamSync(cacheKey);

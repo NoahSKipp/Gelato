@@ -17,7 +17,8 @@ public class CatalogImportService(
     GelatoManager manager,
     CatalogService catalogService,
     ICollectionManager collectionManager,
-    ILibraryManager libraryManager
+    ILibraryManager libraryManager,
+    BackgroundWriteGate writeGate
 )
 {
     public async Task ImportCatalogAsync(
@@ -118,14 +119,19 @@ public class CatalogImportService(
                             {
                                 try
                                 {
-                                    var (item, _) = await manager
-                                        .InsertMeta(
-                                            root,
-                                            meta,
-                                            null,
-                                            true,
-                                            true,
-                                            baseItemKind == BaseItemKind.Series,
+                                    var (item, _) = await writeGate
+                                        .RunAsync(
+                                            "Catalog import",
+                                            () =>
+                                                manager.InsertMeta(
+                                                    root,
+                                                    meta,
+                                                    null,
+                                                    true,
+                                                    true,
+                                                    baseItemKind == BaseItemKind.Series,
+                                                    innerCt
+                                                ),
                                             innerCt
                                         )
                                         .ConfigureAwait(false);
