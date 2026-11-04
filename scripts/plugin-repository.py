@@ -200,7 +200,10 @@ def verify(args):
         if st != 200: problems.append(f"HTTP {st}")
         if len(data) <= 100 * 1024: problems.append("size <= 100 KB")
         if md5 != v.get("checksum"): problems.append("md5 differs from checksum")
-        if meta_version != v["version"]: problems.append(f"meta.json says {meta_version or 'nothing'}")
+        # 1.105.1 and 1.105.1.0 are the same version to Jellyfin.
+        same = lambda a, b: a.split(".") + ["0"] * (4 - len(a.split("."))) == b.split(".") + ["0"] * (4 - len(b.split(".")))
+        if not meta_version or not same(meta_version, v["version"]):
+            problems.append(f"meta.json says {meta_version or 'nothing'}")
         print(f"{line} HTTP {st} {len(data):>9} bytes md5 {md5} checksum {v.get('checksum') or '-':<32} meta.json {meta_version or '-':<12} {'OK' if not problems else 'FAIL ' + ', '.join(problems)}")
         failed += bool(problems)
     sys.exit(1 if failed else 0)
