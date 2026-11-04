@@ -59,15 +59,33 @@ public class GelatoStremioProvider(
         return url;
     }
 
+    // catalog, meta, stream, subtitles or manifest; never the address.
+    private string RequestKind(string url)
+    {
+        var rest = url.StartsWith(baseUrl, StringComparison.OrdinalIgnoreCase) ? url[baseUrl.TrimEnd('/').Length..] : "";
+        var first = rest.TrimStart('/').Split('/', 2)[0];
+        return first.EndsWith(".json", StringComparison.Ordinal) ? first[..^5] : (first.Length > 0 ? first : "request");
+    }
+
     private async Task<T?> GetJsonAsync<T>(string url, CancellationToken ct = default)
     {
         var shown = Services.JsonText.RedactAddonUrl(url, baseUrl);
         log.LogDebug("GetJsonAsync: requesting {Url}", shown);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
 
         try
         {
             var c = NewClient();
             using var resp = await c.GetAsync(url, ct).ConfigureAwait(false);
+            var waited = sw.ElapsedMilliseconds;
+            log.Log(
+                waited >= 2000 ? LogLevel.Information : LogLevel.Debug,
+                "Addon request {Host} {Kind}: HTTP {Status} after {Ms} ms",
+                Uri.TryCreate(url, UriKind.Absolute, out var u) ? u.Host : "addon",
+                RequestKind(url),
+                (int)resp.StatusCode,
+                waited
+            );
 
             if (!resp.IsSuccessStatusCode)
             {

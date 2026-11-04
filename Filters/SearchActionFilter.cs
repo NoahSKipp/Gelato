@@ -177,7 +177,8 @@ public class SearchActionFilter(
         CancellationToken ct
     )
     {
-        var tasks = new List<Task<IReadOnlyList<StremioMeta>>>();
+        var tasks = new List<Task<SearchFanOut<StremioMeta>.Result>>();
+        var kinds = new List<string>();
         var movieFolder = cfg.MovieFolder ?? manager.TryGetMovieFolder(userId);
         var seriesFolder = cfg.SeriesFolder ?? manager.TryGetSeriesFolder(userId);
 
@@ -188,6 +189,7 @@ public class SearchActionFilter(
         if (requestedTypes.Contains(BaseItemKind.Movie) && movieFolder is not null)
         {
             tasks.Add(SearchAnyLanguageAsync(cfg.Stremio!, searchTerm, StremioMediaType.Movie, ct));
+            kinds.Add("movie");
         }
         else if (requestedTypes.Contains(BaseItemKind.Movie))
         {
@@ -199,6 +201,7 @@ public class SearchActionFilter(
         if (requestedTypes.Contains(BaseItemKind.Series) && seriesFolder is not null)
         {
             tasks.Add(SearchAnyLanguageAsync(cfg.Stremio!, searchTerm, StremioMediaType.Series, ct));
+            kinds.Add("series");
         }
         else if (requestedTypes.Contains(BaseItemKind.Series))
         {
@@ -207,7 +210,15 @@ public class SearchActionFilter(
             );
         }
 
-        var results = (await Task.WhenAll(tasks)).SelectMany(r => r).ToList();
+        var answers = await Task.WhenAll(tasks);
+        ct.ThrowIfCancellationRequested();
+        var results = answers.SelectMany(r => r.Items).ToList();
+        // Per request, so a slow addon catalog or TMDB shows up by name.
+        log.LogInformation(
+            "Search \"{Query}\" requests: {Timings}",
+            searchTerm,
+            string.Join("; ", answers.Select((a, i) => $"{kinds[i]}: {string.Join(", ", a.Timings)}"))
+        );
 
         var filterUnreleased = cfg.FilterUnreleased;
         var bufferDays = cfg.FilterUnreleasedBufferDays;
@@ -223,36 +234,19 @@ public class SearchActionFilter(
     // The addon's search only knows one title per entry (usually English).
     // A term in another language is also looked up on TMDB, and the titles
     // it names are searched too; the term's own hits come first.
-    private static async Task<IReadOnlyList<StremioMeta>> SearchAnyLanguageAsync(
+    private static Task<SearchFanOut<StremioMeta>.Result> SearchAnyLanguageAsync(
         GelatoStremioProvider stremio,
         string searchTerm,
         StremioMediaType mediaType,
         CancellationToken ct
-    )
-    {
-        var direct = stremio.SearchAsync(searchTerm, mediaType, ct: ct);
-        if (searchTerm.Trim().Length < 3)
-            return await direct;
-
-        var titles = await stremio.GetSearchTitlesAsync(searchTerm, mediaType, ct);
-        var translated = titles
-            .Take(2)
-            .Select(title => stremio.SearchAsync(title, mediaType, ct: ct))
-            .ToList();
-
-        var merged = new List<StremioMeta>(await direct);
-        var seen = new HashSet<string>(merged.Select(m => m.Id), StringComparer.OrdinalIgnoreCase);
-        foreach (var batch in await Task.WhenAll(translated))
-        {
-            foreach (var meta in batch.Take(5))
-            {
-                if (seen.Add(meta.Id))
-                    merged.Add(meta);
-            }
-        }
-
-        return merged;
-    }
+    ) =>
+        new SearchFanOut<StremioMeta>().RunAsync(
+            searchTerm,
+            (term, c) => stremio.SearchAsync(term, mediaType, ct: c),
+            (term, c) => stremio.GetSearchTitlesAsync(term, mediaType, c),
+            m => m.Id,
+            ct
+        );
 
     private List<BaseItemDto> ConvertMetasToDtos(List<StremioMeta> metas, CancellationToken ct)
     {
