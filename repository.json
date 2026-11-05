@@ -8,6 +8,14 @@
     "owner": "lstb1t",
     "versions": [
       {
+        "changelog": "## [0.26.26.1] - 2026-11-05\n\n### ⚡ Performance\n\n- *(library)* Find existing titles with one index lookup\n- *(streams)* Open a title page without waiting for its streams\n- *(library)* Check a new title's ids once and log each step of opening it\n",
+        "checksum": "8e9bab7b8177f08c5a498e45e9c7bdb5",
+        "sourceUrl": "https://github.com/NoahSKipp/Gelato/releases/download/v0.26.26.1/gelato_0.26.26.1.zip",
+        "targetAbi": "12.0.0.0",
+        "timestamp": "2026-11-05T00:58:17Z",
+        "version": "0.26.26.1"
+      },
+      {
         "changelog": "## [0.26.26.0] - 2026-11-04\n\n### 🚀 Features\n\n- *(search)* Search on TMDB directly, with the addon's catalog as the fallback\n\n### 🐛 Bug Fixes\n\n- *(streams)* Stop syncing stream rows on every stream request\n- *(playback)* Fetch the streams again when stored links no longer play\n\n### ⚡ Performance\n\n- *(search)* Stop waiting for the translated-title searches when the term already found results\n\n### 🧪 Testing\n\n- Script that times Gelato's search requests straight against the addon from the Jellyfin container\n\n### ⚙️ Miscellaneous Tasks\n\n- *(release)* Finish a release that failed after the version commit\n- *(publish)* Never publish a repository entry without its zip and checksum\n- *(publish)* Treat 1.2.3 and 1.2.3.0 as the same version when verifying the manifest\n",
         "checksum": "23320a87c8d89c0bbabeb236e285149f",
         "sourceUrl": "https://github.com/NoahSKipp/Gelato/releases/download/v0.26.26.0/gelato_0.26.26.0.zip",
