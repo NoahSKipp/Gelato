@@ -319,9 +319,17 @@ public sealed class GelatoManager(
         bool allowRemoteRefresh,
         bool refreshItem,
         bool queueRefreshItem,
-        CancellationToken ct
+        CancellationToken ct,
+        StepTimer? steps = null,
+        IReadOnlyDictionary<string, string>? checkedProviderIds = null
     )
     {
+        var sw = Stopwatch.StartNew();
+        void Step(string name)
+        {
+            steps?.Add(name, sw.ElapsedMilliseconds);
+            sw.Restart();
+        }
         var mediaType = meta.Type;
         BaseItem? existing;
 
@@ -394,7 +402,16 @@ public sealed class GelatoManager(
             return (null, false);
         }
 
-        existing = Exist(meta, user);
+        Step("insert: meta");
+        // The caller (opening a search result) checked these ids a moment
+        // ago; only ids the full meta adds need another lookup.
+        // A parallel open of the same title inserts under the same id (it
+        // comes from the stub path), which a primary key lookup finds.
+        existing = mediaType == StremioMediaType.Movie && checkedProviderIds is not null && IntoBaseItem(meta) is { Path: { } stubPath } full
+            && full.ProviderIds.All(p => checkedProviderIds.TryGetValue(p.Key, out var v) && string.Equals(v, p.Value, StringComparison.OrdinalIgnoreCase))
+            ? libraryManager.GetItemById(libraryManager.GetNewItemId(stubPath, full.GetType()))
+            : Exist(meta, user);
+        Step("insert: exists");
 
         if (existing is not null)
         {
@@ -408,6 +425,7 @@ public sealed class GelatoManager(
         }
 
         await EnrichMetaAsync(meta, ct).ConfigureAwait(false);
+        Step("insert: enrich");
 
         if (IntoBaseItem(meta) is not { } baseItem)
         {
@@ -432,6 +450,7 @@ public sealed class GelatoManager(
         {
             baseItem = await SyncSeriesTreesAsync(cfg, meta, ct).ConfigureAwait(false);
         }
+        Step("insert: save");
 
         if (baseItem is null)
         {
@@ -458,6 +477,7 @@ public sealed class GelatoManager(
             {
                 _ = provider.RefreshFullItem(baseItem, options, ct);
             }
+            Step("insert: refresh");
         }
         _log.LogDebug("inserted new {Kind}: {Name}", baseItem.GetBaseItemKind(), baseItem.Name);
         return (baseItem, true);
@@ -506,6 +526,17 @@ public sealed class GelatoManager(
 
     private static readonly SemaphoreSlim WriteGate = new(1, 1);
 
+    private static readonly SemaphoreSlim SyncDbSlots = new(
+        Math.Clamp(Environment.ProcessorCount / 2, 2, 4)
+    );
+
+    private sealed class SlotRelease(SemaphoreSlim slots) : IDisposable
+    {
+        private SemaphoreSlim? _slots = slots;
+
+        public void Dispose() => Interlocked.Exchange(ref _slots, null)?.Release();
+    }
+
     // Small batches with a pause in between, one writer at a time, so short
     // writes (sessions, user data, Jellio state) get the lock between them.
     public async Task SaveInBatchesAsync<T>(IReadOnlyList<T> items, CancellationToken ct)
@@ -526,17 +557,6 @@ public sealed class GelatoManager(
             }
 
             if (start + batchSize < items.Count)
-    private static readonly SemaphoreSlim SyncDbSlots = new(
-        Math.Clamp(Environment.ProcessorCount / 2, 2, 4)
-    );
-
-    private sealed class SlotRelease(SemaphoreSlim slots) : IDisposable
-    {
-        private SemaphoreSlim? _slots = slots;
-
-        public void Dispose() => Interlocked.Exchange(ref _slots, null)?.Release();
-    }
-
             {
                 await Task.Delay(50, ct).ConfigureAwait(false);
             }
@@ -686,6 +706,15 @@ public sealed class GelatoManager(
         var streams = await stremio.GetStreamsAsync(uri).ConfigureAwait(false);
         var httpPort = GetHttpPort();
 
+        // The addon is asked by every sync at once; the database part (the
+        // existing rows, the writes) by a few at a time. Twenty titles
+        // opened together otherwise ran twenty large queries on four cores
+        // and every other request on the server waited for CPU.
+        var fetchedAt = stopwatch.ElapsedMilliseconds;
+        await SyncDbSlots.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+        using var dbSlot = new SlotRelease(SyncDbSlots);
+        var queuedMs = stopwatch.ElapsedMilliseconds - fetchedAt;
+
         // Filter valid streams
         var acceptable = streams
             .Select(s =>
@@ -706,15 +735,6 @@ public sealed class GelatoManager(
             })
             .Where(s => s is not null)
             .ToList();
-        // The addon is asked by every sync at once; the database part (the
-        // existing rows, the writes) by a few at a time. Twenty titles
-        // opened together otherwise ran twenty large queries on four cores
-        // and every other request on the server waited for CPU.
-        var fetchedAt = stopwatch.ElapsedMilliseconds;
-        await SyncDbSlots.WaitAsync(CancellationToken.None).ConfigureAwait(false);
-        using var dbSlot = new SlotRelease(SyncDbSlots);
-        var queuedMs = stopwatch.ElapsedMilliseconds - fetchedAt;
-
 
         // Get existing streams. Same shape as the stream listing in
         // MediaSourceManagerDecorator.GetStaticMediaSources: match on the

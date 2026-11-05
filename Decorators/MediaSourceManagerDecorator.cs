@@ -430,11 +430,17 @@ public sealed class MediaSourceManagerDecorator(
         {
             _ = Task.Run(async () =>
             {
+                var subtitles = Stopwatch.StartNew();
                 try
                 {
                     await _subtitleProvider
                         .Value.GetSubtitlesAsync(uri.ExternalId, uri.MediaType, CancellationToken.None)
                         .ConfigureAwait(false);
+                    _log.LogInformation(
+                        "Subtitles for {Id} fetched ahead in {Ms} ms",
+                        item.Id,
+                        subtitles.ElapsedMilliseconds
+                    );
                 }
                 catch (Exception ex)
                 {
@@ -1254,6 +1260,7 @@ public sealed class MediaSourceManagerDecorator(
             ? Path.GetFileNameWithoutExtension(gelatoFilename)
             : $"{owner.Id:N}";
         var tmpStrm = ProbeTempFile.Create(strmBaseName, streamUrl);
+        var probeTimer = Stopwatch.StartNew();
 
         var origPath = owner.Path;
         var origShortcut = owner.IsShortcut;
@@ -1266,6 +1273,7 @@ public sealed class MediaSourceManagerDecorator(
         {
             // The stream address carries debrid and proxy credentials: never logged.
             _log.LogInformation("Probing stream for {Id}", owner.Id);
+            probeTimer.Restart();
 
             var options = new MetadataRefreshOptions(directoryService)
             {
@@ -1315,6 +1323,7 @@ public sealed class MediaSourceManagerDecorator(
             owner.IsShortcut = origShortcut;
             owner.ShortcutPath = origShortcutPath;
             ProbeTempFile.Delete(tmpStrm);
+            _log.LogInformation("Probed stream for {Id} in {Ms} ms", owner.Id, probeTimer.ElapsedMilliseconds);
         }
     }
 }

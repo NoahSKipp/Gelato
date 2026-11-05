@@ -1,3 +1,4 @@
+using Gelato.Services;
 using Jellyfin.Database.Implementations.Entities;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.TV;
@@ -47,6 +48,29 @@ public class InsertActionFilter(
             return;
         }
 
+        var steps = new StepTimer();
+        try
+        {
+            await InsertAndContinueAsync(ctx, next, guid, userId, user, stremioMeta, steps);
+        }
+        finally
+        {
+            var level = steps.TotalMs >= 1000 ? LogLevel.Information : LogLevel.Debug;
+            log.Log(level, "Opened new title {Id} in {Ms} ms ({Steps})", guid, steps.TotalMs, steps);
+        }
+    }
+
+    private async Task InsertAndContinueAsync(
+        ActionExecutingContext ctx,
+        ActionExecutionDelegate next,
+        Guid guid,
+        Guid userId,
+        User user,
+        StremioMeta stremioMeta,
+        StepTimer steps
+    )
+    {
+
         // Get root folder
         var isSeries = stremioMeta.Type == StremioMediaType.Series;
         var root = isSeries
@@ -59,9 +83,12 @@ public class InsertActionFilter(
             return;
         }
 
+        IReadOnlyDictionary<string, string>? checkedIds = null;
         if (manager.IntoBaseItem(stremioMeta) is { } item)
         {
             var existing = manager.FindExistingItem(item, user);
+            checkedIds = item.ProviderIds;
+            steps.Mark("lookup");
             if (existing is not null)
             {
                 log.LogInformation(
@@ -70,6 +97,7 @@ public class InsertActionFilter(
                 );
                 ctx.ReplaceGuid(existing.Id);
                 await next();
+                steps.Mark("page");
                 return;
             }
         }
@@ -80,6 +108,7 @@ public class InsertActionFilter(
             stremioMeta.ImdbId ?? stremioMeta.Id,
             stremioMeta.Type
         );
+        steps.Mark("meta");
         if (meta is null)
         {
             log.LogError(
@@ -92,7 +121,8 @@ public class InsertActionFilter(
         }
 
         // Insert the item
-        var baseItem = await InsertMetaAsync(guid, root, meta, user);
+        var baseItem = await InsertMetaAsync(guid, root, meta, user, steps, checkedIds);
+        steps.Mark("insert total");
         // The search result's meta stays cached: a later request with the same
         // search id (opening the card again after adding it to the watchlist)
         // then finds the imported item above and goes to it, instead of
@@ -103,6 +133,7 @@ public class InsertActionFilter(
         }
 
         await next();
+        steps.Mark("page");
     }
 
     private async Task HandleLocalSeriesAsync(Guid userId, Series series, CancellationToken ct)
@@ -145,7 +176,9 @@ public class InsertActionFilter(
         Guid guid,
         Folder root,
         StremioMeta meta,
-        User user
+        User user,
+        StepTimer? steps = null,
+        IReadOnlyDictionary<string, string>? checkedProviderIds = null
     )
     {
         BaseItem? baseItem = null;
@@ -163,7 +196,9 @@ public class InsertActionFilter(
                     false,
                     true,
                     meta.Type is StremioMediaType.Series,
-                    ct
+                    ct,
+                    steps,
+                    checkedProviderIds
                 );
             }
         );
