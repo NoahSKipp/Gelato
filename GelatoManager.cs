@@ -33,7 +33,8 @@ public sealed class GelatoManager(
     ILibraryManager libraryManager,
     IDirectoryService directoryService,
     IApplicationPaths appPaths,
-    BackgroundWriteGate writeGate
+    BackgroundWriteGate writeGate,
+    ProviderIdLookup providerIds
 )
 {
     public const string StreamTag = "gelato-stream";
@@ -266,6 +267,25 @@ public sealed class GelatoManager(
 
     public BaseItem? FindExistingItem(BaseItem item, User? user = null)
     {
+        if (
+            item.ProviderIds is { Count: > 0 } ids
+            && item.GetType().FullName is { } typeName
+            && providerIds.Find(ids, typeName) is { } found
+        )
+        {
+            foreach (var id in found)
+            {
+                if (libraryManager.GetItemById(id) is not { } hit)
+                    continue;
+                if (hit is Video v && v.IsStream())
+                    continue;
+                if (user is not null && !hit.IsVisibleStandalone(user))
+                    continue;
+                return hit;
+            }
+            return null;
+        }
+
         var query = new InternalItemsQuery
         {
             IncludeItemTypes = [item.GetBaseItemKind()],

@@ -40,6 +40,7 @@ public class ServiceRegistrator : IPluginServiceRegistrator
         services.AddSingleton<ArtworkOnOpenFilter>();
         services.AddSingleton<Gelato.Services.ArtworkBackfillService>();
         services.AddSingleton<GelatoManager>();
+        services.AddSingleton<ProviderIdLookup>();
         services.AddSingleton<BadStreamStore>();
         services.AddSingleton<WarmTracker>();
         services.AddSingleton<NzbdavPresence>();

@@ -44,7 +44,34 @@ public class GelatoItemRepository(IItemRepository inner, IHttpContextAccessor ht
 
     public IReadOnlyList<BaseItem> GetItemList(InternalItemsQuery filter)
     {
+        if (IsExtrasOfGelatoItems(filter))
+            return [];
         return inner.GetItemList(ApplyFilters(filter));
+    }
+
+    // Gelato titles and stream rows never own extras (trailers, specials),
+    // but Jellyfin looks them up on every item page: on a large library that
+    // query scans for a few hundred ms each time.
+    private static bool IsExtrasOfGelatoItems(InternalItemsQuery filter)
+    {
+        if (filter.OwnerIds is not { Length: > 0 } owners || BaseItem.LibraryManager is not { } library)
+            return false;
+        foreach (var id in owners)
+        {
+            // Only Gelato's own stubs and stream rows: a local file that
+            // Gelato knows can have extras next to it.
+            if (
+                library.GetItemById(id) is not { } owner
+                || !owner.IsGelato()
+                || !(
+                    owner.Path is null
+                    || owner.Path.StartsWith("gelato", StringComparison.OrdinalIgnoreCase)
+                    || owner.Path.StartsWith("http", StringComparison.OrdinalIgnoreCase)
+                )
+            )
+                return false;
+        }
+        return true;
     }
 
     private InternalItemsQuery ApplyFilters(InternalItemsQuery filter)
