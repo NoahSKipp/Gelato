@@ -130,7 +130,21 @@ public sealed class GelatoApiController : ControllerBase
         // MediaSourceManagerDecorator.cs's own real cache-key construction.
         // A repeat prefetch still probes and warms subtitles even when the
         // stream list is fresh.
-        RunDetached(() => WarmLoggedAsync(itemId, true, () => WarmItemAsync(item, userId, true)));
+        // The stream list does not queue behind other warm-ups (two at a time,
+        // for nzbdav); only the probe does.
+        RunDetached(async () =>
+        {
+            try
+            {
+                await SyncIfNeededAsync(item, userId, background: false).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _log.LogDebug(ex, "Stream sync for {ItemId} failed", itemId);
+            }
+            await WarmLoggedAsync(itemId, true, () => WarmItemAsync(item, userId, true, background: false))
+                .ConfigureAwait(false);
+        });
         return Accepted();
     }
 
@@ -286,20 +300,27 @@ public sealed class GelatoApiController : ControllerBase
         await WarmItemAsync(item, userId, step.Probe).ConfigureAwait(false);
     }
 
-    private async Task WarmItemAsync(BaseItem item, Guid userId, bool probe)
+    // background: nobody has the title open (a batch from a result list), so
+    // its writes queue behind the other background writers. The title page's
+    // own prefetch has a viewer and does not.
+    private async Task WarmItemAsync(BaseItem item, Guid userId, bool probe, bool background = true)
     {
-        var cacheKey = $"{userId}:{(item as Video)?.PrimaryVersionId ?? item.Id}";
-        if (!_gelatoManager.HasStreamSync(cacheKey))
-        {
-            var count = await _gelatoManager
-                .SyncStreams(item, userId, CancellationToken.None, background: true)
-                .ConfigureAwait(false);
-            if (count > 0)
-                _gelatoManager.SetStreamSync(cacheKey);
-        }
+        await SyncIfNeededAsync(item, userId, background).ConfigureAwait(false);
         // The probe is the same call Play makes, so Play reuses its result.
         if (probe)
             await WarmPlaybackDataAsync(item, userId, item.Id).ConfigureAwait(false);
+    }
+
+    private async Task SyncIfNeededAsync(BaseItem item, Guid userId, bool background)
+    {
+        var cacheKey = $"{userId}:{(item as Video)?.PrimaryVersionId ?? item.Id}";
+        if (_gelatoManager.HasStreamSync(cacheKey))
+            return;
+        var count = await _gelatoManager
+            .SyncStreams(item, userId, CancellationToken.None, background)
+            .ConfigureAwait(false);
+        if (count > 0)
+            _gelatoManager.SetStreamSync(cacheKey);
     }
 
     // One line per warm-up; no addresses.

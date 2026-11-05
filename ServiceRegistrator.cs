@@ -31,6 +31,7 @@ public class ServiceRegistrator : IPluginServiceRegistrator
     public void RegisterServices(IServiceCollection services, IServerApplicationHost host)
     {
         services.AddSingleton<InsertActionFilter>();
+        services.AddSingleton<StreamSyncFilter>();
         services.AddSingleton<SearchActionFilter>();
         services.AddSingleton<PlaybackInfoFilter>();
         services.AddSingleton<ImageResourceFilter>();
@@ -39,8 +40,8 @@ public class ServiceRegistrator : IPluginServiceRegistrator
         services.AddSingleton<ResumeItemsFilter>();
         services.AddSingleton<ArtworkOnOpenFilter>();
         services.AddSingleton<Gelato.Services.ArtworkBackfillService>();
-        services.AddSingleton<GelatoManager>();
         services.AddSingleton<ProviderIdLookup>();
+        services.AddSingleton<GelatoManager>();
         services.AddSingleton<BadStreamStore>();
         services.AddSingleton<WarmTracker>();
         services.AddSingleton<NzbdavPresence>();
@@ -120,6 +121,7 @@ public class ServiceRegistrator : IPluginServiceRegistrator
             o.Filters.AddService<InsertActionFilter>(order: 1);
             o.Filters.AddService<SearchActionFilter>(order: 2);
             o.Filters.AddService<PlaybackInfoFilter>(order: 3);
+            o.Filters.AddService<StreamSyncFilter>(order: 4);
             o.Filters.AddService<ImageResourceFilter>();
             o.Filters.AddService<DeleteResourceFilter>();
             o.Filters.AddService<DownloadFilter>();

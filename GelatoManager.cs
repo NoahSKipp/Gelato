@@ -526,6 +526,17 @@ public sealed class GelatoManager(
             }
 
             if (start + batchSize < items.Count)
+    private static readonly SemaphoreSlim SyncDbSlots = new(
+        Math.Clamp(Environment.ProcessorCount / 2, 2, 4)
+    );
+
+    private sealed class SlotRelease(SemaphoreSlim slots) : IDisposable
+    {
+        private SemaphoreSlim? _slots = slots;
+
+        public void Dispose() => Interlocked.Exchange(ref _slots, null)?.Release();
+    }
+
             {
                 await Task.Delay(50, ct).ConfigureAwait(false);
             }
@@ -695,6 +706,15 @@ public sealed class GelatoManager(
             })
             .Where(s => s is not null)
             .ToList();
+        // The addon is asked by every sync at once; the database part (the
+        // existing rows, the writes) by a few at a time. Twenty titles
+        // opened together otherwise ran twenty large queries on four cores
+        // and every other request on the server waited for CPU.
+        var fetchedAt = stopwatch.ElapsedMilliseconds;
+        await SyncDbSlots.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+        using var dbSlot = new SlotRelease(SyncDbSlots);
+        var queuedMs = stopwatch.ElapsedMilliseconds - fetchedAt;
+
 
         // Get existing streams. Same shape as the stream listing in
         // MediaSourceManagerDecorator.GetStaticMediaSources: match on the
@@ -943,11 +963,12 @@ public sealed class GelatoManager(
         stopwatch.Stop();
 
         _log.LogInformation(
-            "SyncStreams finished GelatoId={GelatoId} userId={UserId} duration={Duration}s fetch={FetchMs}ms wait={WaitMs}ms write={WriteMs}ms streams={Streams} written={Written} adopted={Adopted} deleted={Deleted}",
+            "SyncStreams finished GelatoId={GelatoId} userId={UserId} duration={Duration}s fetch={FetchMs}ms queue={QueueMs}ms wait={WaitMs}ms write={WriteMs}ms streams={Streams} written={Written} adopted={Adopted} deleted={Deleted}",
             uri.ExternalId,
             userId,
             Math.Round(stopwatch.Elapsed.TotalSeconds, 1),
-            fetched,
+            fetched - queuedMs,
+            queuedMs,
             writeStarted - fetched,
             stopwatch.ElapsedMilliseconds - writeStarted,
             upsertedStreams.Count - 1,

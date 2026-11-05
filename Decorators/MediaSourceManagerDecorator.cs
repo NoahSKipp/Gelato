@@ -145,17 +145,8 @@ public sealed class MediaSourceManagerDecorator(
         if (slots is null)
             return _inner.GetStaticMediaSources(item, enablePathSubstitution, user);
 
-        var ctx = _http.HttpContext;
         var take = slots.Count;
-        if (
-            take > DetailSourceCap
-            && ctx?.Request.Method == "GET"
-            && ctx.GetActionName() is "GetItem" or "GetItemLegacy"
-            && !(
-                ctx.Request.Query.TryGetValue("fields", out var fields)
-                && fields.ToString().Contains("MediaSources", StringComparison.OrdinalIgnoreCase)
-            )
-        )
+        if (take > DetailSourceCap && _http.HttpContext.IsDetailWithoutSources())
         {
             take = DetailSourceCap;
         }
@@ -271,7 +262,7 @@ public sealed class MediaSourceManagerDecorator(
         }
 
         var sw = Stopwatch.StartNew();
-        var streams = LoadStreamItems(item, userId);
+        var streams = TakeStashed(ctx, item, userId) ?? LoadStreamItems(item, userId);
         var query = sw.ElapsedMilliseconds;
 
         // A stream row's streams are its title's: syncing the row itself only
@@ -291,7 +282,14 @@ public sealed class MediaSourceManagerDecorator(
                 ct => RefreshStreamsAsync(item, uri, userId, cacheKey, background, ct)
             );
 
-            if (streams.Count == 0)
+            // The detail page does not wait: it shows the title now and the
+            // streams arrive for the picker and Play, which wait for them
+            // (StreamSyncFilter awaits them before the action runs).
+            if (streams.Count == 0 && ctx.IsDetailWithoutSources())
+            {
+                _log.LogDebug("Detail for {Id} answered while its streams are fetched", item.Id);
+            }
+            else if (streams.Count == 0)
             {
                 sync.GetAwaiter().GetResult();
                 // refresh item
@@ -355,6 +353,56 @@ public sealed class MediaSourceManagerDecorator(
         }
 
         return slots;
+    }
+
+    private static string StashKey(BaseItem item, Guid userId) => $"gelato:rows:{item.Id:N}:{userId:N}";
+
+    private static List<(Video Item, Dictionary<string, JsonElement>? Data)>? TakeStashed(
+        HttpContext? ctx,
+        BaseItem item,
+        Guid userId
+    )
+    {
+        if (ctx is null || !ctx.Items.Remove(StashKey(item, userId), out var rows))
+            return null;
+        return rows as List<(Video Item, Dictionary<string, JsonElement>? Data)>;
+    }
+
+    // Fetches a title's streams before the action that lists or plays them
+    // runs, so ResolveSlots finds them stored instead of blocking a request
+    // thread on the sync. Returns the ms waited, 0 when nothing was needed.
+    public async Task<long> EnsureStreamsAsync(BaseItem item, Guid userId, CancellationToken ct)
+    {
+        if (userId == Guid.Empty || item.IsStream())
+            return 0;
+        var cfg = GelatoPlugin.Instance!.GetConfig(userId);
+        if (
+            (!cfg.EnableMixed && !IsGelatoPlaybackItem(item))
+            || item.GetBaseItemKind() is not (BaseItemKind.Movie or BaseItemKind.Episode)
+            || StremioUri.FromBaseItem(item) is not { } uri
+        )
+            return 0;
+        var cacheKey = $"{userId}:{(item as Video)?.PrimaryVersionId ?? item.Id}";
+        var manager = _manager.Value;
+        if (manager.HasStreamSync(cacheKey))
+            return 0;
+        var rows = LoadStreamItems(item, userId);
+        if (rows.Count > 0)
+        {
+            // ResolveSlots reuses them instead of asking again.
+            if (_http.HttpContext is { } http)
+                http.Items[StashKey(item, userId)] = rows;
+            return 0;
+        }
+        var sw = Stopwatch.StartNew();
+        await _lock
+            .RunSingleFlightAsync(
+                item.Id,
+                c => RefreshStreamsAsync(item, uri, userId, cacheKey, false, c)
+            )
+            .WaitAsync(ct)
+            .ConfigureAwait(false);
+        return sw.ElapsedMilliseconds;
     }
 
     private async Task RefreshStreamsAsync(

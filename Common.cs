@@ -309,6 +309,17 @@ public static class ActionContextExtensions
     public static string? GetActionName(this HttpContext? ctx) =>
         ctx?.GetEndpoint()?.Metadata.GetMetadata<ControllerActionDescriptor>()?.ActionName;
 
+    // Item details that did not ask for their sources (the detail page):
+    // they are answered without waiting for a stream sync.
+    public static bool IsDetailWithoutSources(this HttpContext? ctx) =>
+        ctx is not null
+        && HttpMethods.IsGet(ctx.Request.Method)
+        && ctx.GetActionName() is "GetItem" or "GetItemLegacy" or "GetItems" or "GetItemsByUserIdLegacy"
+        && !(
+            ctx.Request.Query.TryGetValue("fields", out var fields)
+            && fields.ToString().Contains("MediaSources", StringComparison.OrdinalIgnoreCase)
+        );
+
     public static bool IsApiListing(this HttpContext ctx)
     {
         var actionName = ctx.GetActionName();
