@@ -1890,10 +1890,20 @@ public sealed class GelatoManager(
         }
 
         var premiere = meta.GetPremiereDate();
-        // Compare by day: stored and parsed values can differ in DateTimeKind only.
-        if (premiere.HasValue && episode.PremiereDate?.Date != premiere.Value.Date)
+        // Compare by day (or time-of-day when an exact air time is provided).
+        if (
+            premiere.HasValue
+            && (
+                episode.PremiereDate?.Date != premiere.Value.Date
+                || (
+                    premiere.Value.TimeOfDay != TimeSpan.Zero
+                    && episode.PremiereDate?.TimeOfDay != premiere.Value.TimeOfDay
+                )
+            )
+        )
         {
             episode.PremiereDate = premiere;
+            episode.EndDate = premiere;
             changed = true;
         }
 

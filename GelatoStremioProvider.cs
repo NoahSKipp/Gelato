@@ -771,8 +771,20 @@ public class StremioMeta
 
     public DateTime? GetPremiereDate()
     {
+        if (
+            FirstAired is { } fa
+            && fa.TimeOfDay != TimeSpan.Zero
+            && (Released is null || Released.Value.Date == fa.Date)
+        )
+        {
+            return fa;
+        }
+
         if (Released is { } dt)
             return dt;
+
+        if (FirstAired is { } firstAired)
+            return firstAired;
 
         var year = GetYear();
         if (year is null)
