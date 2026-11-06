@@ -115,19 +115,56 @@ public sealed class GelatoManager(
     public DateTime? StreamSyncedAt(string guid) =>
         _streamSyncs.TryGet(guid, out var at) ? at : null;
 
+    private readonly ConcurrentDictionary<Guid, (DateTime At, StremioMeta Meta)> _persistentMeta = new();
+    private const int MaxPersistentMeta = 20000;
+    private static readonly TimeSpan PersistentMetaTtl = TimeSpan.FromDays(7);
+
     public void SaveStremioMeta(Guid guid, StremioMeta meta)
     {
         memoryCache.Set($"meta:{guid}", meta, TimeSpan.FromMinutes(360));
+
+        if (_persistentMeta.Count >= MaxPersistentMeta)
+        {
+            var now = DateTime.UtcNow;
+            foreach (var stale in _persistentMeta.Where(e => now - e.Value.At >= PersistentMetaTtl).Select(e => e.Key).Take(1000).ToList())
+            {
+                _persistentMeta.TryRemove(stale, out _);
+            }
+
+            if (_persistentMeta.Count >= MaxPersistentMeta)
+            {
+                var oldestKeys = _persistentMeta.OrderBy(e => e.Value.At).Select(e => e.Key).Take(500).ToList();
+                foreach (var k in oldestKeys)
+                {
+                    _persistentMeta.TryRemove(k, out _);
+                }
+            }
+        }
+
+        _persistentMeta[guid] = (DateTime.UtcNow, meta);
     }
 
     public StremioMeta? GetStremioMeta(Guid guid)
     {
-        return memoryCache.TryGetValue($"meta:{guid}", out var value) ? value as StremioMeta : null;
+        if (memoryCache.TryGetValue($"meta:{guid}", out var value) && value is StremioMeta meta)
+        {
+            return meta;
+        }
+
+        if (_persistentMeta.TryGetValue(guid, out var entry))
+        {
+            // Repopulate memoryCache for quick subsequent lookups
+            memoryCache.Set($"meta:{guid}", entry.Meta, TimeSpan.FromMinutes(360));
+            return entry.Meta;
+        }
+
+        return null;
     }
 
     public void RemoveStremioMeta(Guid guid)
     {
         memoryCache.Remove($"meta:{guid}");
+        _persistentMeta.TryRemove(guid, out _);
     }
 
     public void ClearCache()
@@ -1076,12 +1113,12 @@ public sealed class GelatoManager(
 
         if (existingSeries is not null)
         {
-            // Local (non-gelato) series — use as-is, no creation needed
+            // Local (non-gelato) series - use as-is, no creation needed
             series = existingSeries;
         }
         else
         {
-            // Gelato series — create or find under the virtual folder
+            // Gelato series - create or find under the virtual folder
             if (seriesRootFolder is null || string.IsNullOrWhiteSpace(seriesRootFolder.Path))
             {
                 _log.LogWarning("seriesRootFolder null or empty for {SeriesId}", seriesMeta.Id);
@@ -2044,7 +2081,7 @@ public sealed class GelatoManager(
 
         item.PremiereDate = meta.GetPremiereDate();
 
-        // Always set EndDate so it's never NULL — NULL breaks MaxEndDate filtering (SQL NULL semantics).
+        // Always set EndDate so it's never NULL - NULL breaks MaxEndDate filtering (SQL NULL semantics).
         // Movies: use digital release date (TMDB type-4); sentinel 9999 means no digital date yet.
         // Exception: if PremiereDate is older than 1 year, use it as EndDate so old media without a
         // digital release date is never hidden by the unreleased filter.
@@ -2066,7 +2103,7 @@ public sealed class GelatoManager(
         item.ProductionYear = meta.GetYear();
         item.Path = $"gelato://stub/{id}";
 
-        // Provider IDs — skip for episodes since the parent series IMDB id is used there
+        // Provider IDs - skip for episodes since the parent series IMDB id is used there
         if (meta.Type is not StremioMediaType.Episode && !string.IsNullOrWhiteSpace(id))
         {
             var providerMappings = new (string Prefix, string Provider, bool StripPrefix)[]

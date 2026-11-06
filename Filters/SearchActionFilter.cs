@@ -39,7 +39,7 @@ public class SearchActionFilter(
         ItemFields.Chapters,
     ];
 
-    private static readonly ItemFields[] ResultFields = Enum.GetValues<ItemFields>()
+    public static readonly ItemFields[] ResultFields = Enum.GetValues<ItemFields>()
         .Except(SkippedFields)
         .ToArray();
 

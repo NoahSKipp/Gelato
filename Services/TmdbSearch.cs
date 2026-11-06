@@ -81,6 +81,167 @@ public sealed class TmdbSearch(IHttpClientFactory http, ILogger<TmdbSearch> log)
             .Select(g => g.First())
             .ToList();
 
+        var metas = await ResolveCandidatesAsync(candidates, key, sw, timings, ct).ConfigureAwait(false);
+        ct.ThrowIfCancellationRequested();
+        log.LogDebug("TMDB search took {Ms} ms", sw.ElapsedMilliseconds);
+        return new Result(true, metas, timings.ToList());
+    }
+
+    private static readonly Dictionary<string, int> MovieGenres = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["Action"] = 28,
+        ["Adventure"] = 12,
+        ["Animation"] = 16,
+        ["Comedy"] = 35,
+        ["Crime"] = 80,
+        ["Documentary"] = 99,
+        ["Drama"] = 18,
+        ["Family"] = 10751,
+        ["Fantasy"] = 14,
+        ["History"] = 36,
+        ["Horror"] = 27,
+        ["Music"] = 10402,
+        ["Mystery"] = 9648,
+        ["Romance"] = 10749,
+        ["Sci-Fi"] = 878,
+        ["Science Fiction"] = 878,
+        ["Sci Fi"] = 878,
+        ["SciFi"] = 878,
+        ["Thriller"] = 53,
+        ["War"] = 10752,
+        ["Western"] = 37,
+        ["Action & Adventure"] = 28,
+        ["Action and Adventure"] = 28,
+        ["Sci-Fi & Fantasy"] = 878,
+        ["Sci Fi & Fantasy"] = 878,
+        ["War & Politics"] = 10752
+    };
+
+    private static readonly Dictionary<string, int> TvGenres = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["Action"] = 10759,
+        ["Action & Adventure"] = 10759,
+        ["Action and Adventure"] = 10759,
+        ["Adventure"] = 10759,
+        ["Animation"] = 16,
+        ["Comedy"] = 35,
+        ["Crime"] = 80,
+        ["Documentary"] = 99,
+        ["Drama"] = 18,
+        ["Family"] = 10751,
+        ["Fantasy"] = 10765,
+        ["Sci-Fi & Fantasy"] = 10765,
+        ["Sci-Fi"] = 10765,
+        ["Science Fiction"] = 10765,
+        ["Sci Fi"] = 10765,
+        ["SciFi"] = 10765,
+        ["Mystery"] = 9648,
+        ["War"] = 10768,
+        ["War & Politics"] = 10768,
+        ["Western"] = 37
+    };
+
+    public static int? GetMovieGenreId(string genre)
+    {
+        if (string.IsNullOrWhiteSpace(genre)) return null;
+        var trimmed = genre.Trim();
+        if (MovieGenres.TryGetValue(trimmed, out var id)) return id;
+        if (int.TryParse(trimmed, out var parsed)) return parsed;
+        return null;
+    }
+
+    public static int? GetTvGenreId(string genre)
+    {
+        if (string.IsNullOrWhiteSpace(genre)) return null;
+        var trimmed = genre.Trim();
+        if (TvGenres.TryGetValue(trimmed, out var id)) return id;
+        if (int.TryParse(trimmed, out var parsed)) return parsed;
+        return null;
+    }
+
+    public async Task<Result> DiscoverAsync(
+        string genre,
+        bool movies,
+        bool series,
+        string language,
+        int page,
+        CancellationToken ct
+    )
+    {
+        var sw = Stopwatch.StartNew();
+        var timings = new ConcurrentQueue<string>();
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        budget.CancelAfter(SearchBudget);
+        var key = GelatoStremioProvider.GetTmdbApiKey();
+        var targetPage = Math.Max(1, page);
+
+        var filterByGenre = !string.IsNullOrWhiteSpace(genre) && !genre.Equals("all", StringComparison.OrdinalIgnoreCase);
+        var movieGenreId = filterByGenre ? GetMovieGenreId(genre) : null;
+        var tvGenreId = filterByGenre ? GetTvGenreId(genre) : null;
+
+        var queryMovies = movies && (!filterByGenre || movieGenreId.HasValue);
+        var queryTv = series && (!filterByGenre || tvGenreId.HasValue);
+
+        if (!queryMovies && !queryTv)
+        {
+            return new Result(true, [], timings.ToList());
+        }
+
+        async Task<(bool Ok, List<Hit> Hits)> DiscoverPage(string kind, int? genreId)
+        {
+            var started = sw.ElapsedMilliseconds;
+            var genreParam = genreId.HasValue ? $"with_genres={genreId.Value}&" : "";
+            var url = $"{ApiBase}/discover/{kind}?{genreParam}language={language}&include_adult=false&sort_by=popularity.desc&page={targetPage}&api_key={key}";
+            try
+            {
+                var body = await Client().GetStringAsync(url, budget.Token).ConfigureAwait(false);
+                var hits = JsonSerializer.Deserialize<SearchPage>(body, Json)?.Results ?? [];
+                timings.Enqueue($"{kind} discover page {targetPage} {sw.ElapsedMilliseconds - started} ms ({hits.Count})");
+                return (true, hits);
+            }
+            catch (Exception ex) when (!ct.IsCancellationRequested)
+            {
+                timings.Enqueue($"{kind} discover page {targetPage} failed after {sw.ElapsedMilliseconds - started} ms ({ex.GetType().Name})");
+                return (false, []);
+            }
+        }
+
+        var movieTask = queryMovies ? DiscoverPage("movie", movieGenreId) : Task.FromResult((Ok: true, Hits: new List<Hit>()));
+        var tvTask = queryTv ? DiscoverPage("tv", tvGenreId) : Task.FromResult((Ok: true, Hits: new List<Hit>()));
+
+        var (movieRes, tvRes) = (await movieTask.ConfigureAwait(false), await tvTask.ConfigureAwait(false));
+        ct.ThrowIfCancellationRequested();
+
+        if ((queryMovies && !movieRes.Ok) || (queryTv && !tvRes.Ok))
+        {
+            return new Result(false, [], timings.ToList());
+        }
+
+        var candidates = movieRes.Hits.Select(h => (Kind: "movie", Hit: h))
+            .Concat(tvRes.Hits.Select(h => (Kind: "tv", Hit: h)))
+            .GroupBy(c => c.Kind + ":" + c.Hit.Id)
+            .Select(g => g.First())
+            .ToList();
+
+        if (candidates.Any(c => c.Hit.Popularity > 0))
+        {
+            candidates = candidates.OrderByDescending(c => c.Hit.Popularity ?? 0).ToList();
+        }
+
+        var metas = await ResolveCandidatesAsync(candidates, key, sw, timings, ct).ConfigureAwait(false);
+        ct.ThrowIfCancellationRequested();
+        log.LogDebug("TMDB discover took {Ms} ms", sw.ElapsedMilliseconds);
+        return new Result(true, metas, timings.ToList());
+    }
+
+    private async Task<List<StremioMeta>> ResolveCandidatesAsync(
+        List<(string Kind, Hit Hit)> candidates,
+        string key,
+        Stopwatch sw,
+        ConcurrentQueue<string> timings,
+        CancellationToken ct
+    )
+    {
         var idStarted = sw.ElapsedMilliseconds;
         var cached = 0;
         using var gate = new SemaphoreSlim(Parallel);
@@ -125,8 +286,7 @@ public sealed class TmdbSearch(IHttpClientFactory http, ILogger<TmdbSearch> log)
         timings.Enqueue(
             $"imdb ids {sw.ElapsedMilliseconds - idStarted} ms ({metas.Count} of {candidates.Count}, {cached} cached)"
         );
-        log.LogDebug("TMDB search took {Ms} ms", sw.ElapsedMilliseconds);
-        return new Result(true, metas, timings.ToList());
+        return metas;
     }
 
     private HttpClient Client()
@@ -196,6 +356,9 @@ public sealed class TmdbSearch(IHttpClientFactory http, ILogger<TmdbSearch> log)
 
         [JsonPropertyName("vote_average")]
         public double? VoteAverage { get; set; }
+
+        [JsonPropertyName("popularity")]
+        public double? Popularity { get; set; }
     }
 
     private sealed class ExternalIds

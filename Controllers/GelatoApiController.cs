@@ -12,6 +12,7 @@ using Jellyfin.Data.Enums;
 using Jellyfin.Database.Implementations.Entities;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller;
+using MediaBrowser.Controller.Configuration;
 using MediaBrowser.Controller.Dto;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
@@ -43,6 +44,8 @@ public sealed class GelatoApiController : ControllerBase
     private readonly NzbdavPresence _nzbdav;
     private readonly WarmupGate _gate;
     private readonly BackgroundWriteGate _writeGate;
+    private readonly TmdbSearch _tmdb;
+    private readonly IServerConfigurationManager _serverConfig;
     private readonly string _downloadPath;
 
     private static readonly SlidingWindowLimiter BatchLimiter = new(
@@ -68,9 +71,13 @@ public sealed class GelatoApiController : ControllerBase
         WarmTracker warm,
         NzbdavPresence nzbdav,
         WarmupGate gate,
-        BackgroundWriteGate writeGate
+        BackgroundWriteGate writeGate,
+        TmdbSearch tmdb,
+        IServerConfigurationManager serverConfig
     )
     {
+        _tmdb = tmdb;
+        _serverConfig = serverConfig;
         _warm = warm;
         _nzbdav = nzbdav;
         _gate = gate;
@@ -93,6 +100,119 @@ public sealed class GelatoApiController : ControllerBase
     // might attach. Broadening this list broadens the background work
     // every prefetch now pays for, not something to do without being asked.
     private static readonly string[] PrewarmSubtitleLanguages = ["eng", "ger", "deu"];
+
+    [HttpGet("discover")]
+    [Authorize]
+    public async Task<ActionResult<List<BaseItemDto>>> Discover(
+        [FromQuery] string? genre = null,
+        [FromQuery] string? types = null,
+        [FromQuery] int page = 1,
+        [FromQuery] string? language = null,
+        CancellationToken ct = default
+    ) => await DiscoverInternal(null, genre, types, page, language, ct).ConfigureAwait(false);
+
+    [HttpGet("discover/{mediaType}")]
+    [Authorize]
+    public async Task<ActionResult<List<BaseItemDto>>> DiscoverMediaType(
+        [FromRoute] string mediaType,
+        [FromQuery] string? genre = null,
+        [FromQuery] string? types = null,
+        [FromQuery] int page = 1,
+        [FromQuery] string? language = null,
+        CancellationToken ct = default
+    ) => await DiscoverInternal(mediaType, genre, types, page, language, ct).ConfigureAwait(false);
+
+    private async Task<ActionResult<List<BaseItemDto>>> DiscoverInternal(
+        string? mediaType,
+        string? genre,
+        string? types,
+        int page,
+        string? language,
+        CancellationToken ct
+    )
+    {
+        HttpContext.TryGetUserId(out var userId);
+        var cfg = GelatoPlugin.Instance!.GetConfig(userId);
+
+        var wantMovies = true;
+        var wantSeries = true;
+
+        if (!string.IsNullOrWhiteSpace(mediaType))
+        {
+            var m = mediaType.Trim();
+            if (m.Equals("movie", StringComparison.OrdinalIgnoreCase) || m.Equals("movies", StringComparison.OrdinalIgnoreCase))
+            {
+                wantMovies = true;
+                wantSeries = false;
+            }
+            else if (m.Equals("series", StringComparison.OrdinalIgnoreCase) || m.Equals("tv", StringComparison.OrdinalIgnoreCase) || m.Equals("show", StringComparison.OrdinalIgnoreCase) || m.Equals("shows", StringComparison.OrdinalIgnoreCase))
+            {
+                wantMovies = false;
+                wantSeries = true;
+            }
+        }
+        else if (!string.IsNullOrWhiteSpace(types))
+        {
+            var t = types.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            var hasMovie = t.Any(x => x.Equals("movie", StringComparison.OrdinalIgnoreCase) || x.Equals("movies", StringComparison.OrdinalIgnoreCase));
+            var hasSeries = t.Any(x => x.Equals("series", StringComparison.OrdinalIgnoreCase) || x.Equals("tv", StringComparison.OrdinalIgnoreCase) || x.Equals("show", StringComparison.OrdinalIgnoreCase) || x.Equals("shows", StringComparison.OrdinalIgnoreCase));
+            if (hasMovie || hasSeries)
+            {
+                wantMovies = hasMovie;
+                wantSeries = hasSeries;
+            }
+        }
+
+        var lang = string.IsNullOrWhiteSpace(language) ? MetadataLanguage() : language.Trim();
+        var p = page < 1 ? 1 : page;
+        var result = await _tmdb.DiscoverAsync(genre ?? string.Empty, wantMovies, wantSeries, lang, p, ct).ConfigureAwait(false);
+
+        var metas = result.Metas;
+        if (cfg.FilterUnreleased)
+        {
+            metas = metas.Where(m => m.IsReleased(cfg.FilterUnreleasedBufferDays)).ToList();
+        }
+
+        var options = new DtoOptions(false)
+        {
+            Fields = SearchActionFilter.ResultFields,
+            EnableImages = true,
+            EnableUserData = false,
+        };
+
+        var dtos = new List<BaseItemDto>(metas.Count);
+        foreach (var meta in metas)
+        {
+            if (ct.IsCancellationRequested)
+            {
+                break;
+            }
+
+            var baseItem = _gelatoManager.IntoBaseItem(meta);
+            if (baseItem is null)
+            {
+                continue;
+            }
+
+            var dto = _dtoService.GetBaseItemDto(baseItem, options);
+            SearchActionFilter.FillSkippedFields(dto, baseItem);
+            var stremioUri = StremioUri.FromBaseItem(baseItem);
+            dto.Id = stremioUri.ToGuid();
+            _gelatoManager.SaveStremioMeta(dto.Id, meta);
+            dtos.Add(dto);
+        }
+
+        return Ok(dtos);
+    }
+
+    private string MetadataLanguage()
+    {
+        var c = _serverConfig?.Configuration;
+        var lang = string.IsNullOrWhiteSpace(c?.PreferredMetadataLanguage) ? "en" : c.PreferredMetadataLanguage;
+        return string.IsNullOrWhiteSpace(c?.MetadataCountryCode) || lang.Contains('-')
+            ? lang
+            : lang + "-" + c.MetadataCountryCode.ToUpperInvariant();
+    }
 
     // Card-open today blocks on SyncStreams (a network round trip to the
     // Stremio addon) the first time an item is opened, since
@@ -662,7 +782,7 @@ public sealed class GelatoApiController : ControllerBase
     /// Jellyfin 12's MigrateLinkedChildren migration deletes every non-folder item whose path
     /// is not under a library location. Gelato addresses its items by gelato:// and https://
     /// URLs, so all of them qualify. The migration skips that cleanup when any library location
-    /// is missing or empty, and Gelato empties its own folders on shutdown to trigger that — but
+    /// is missing or empty, and Gelato empties its own folders on shutdown to trigger that - but
     /// only the seed stub is removed, so anything else in the folder (a NAS "@eaDir", a
     /// "Thumbs.db", or real media sharing the folder) keeps it non-empty and the library is
     /// destroyed on the first Jellyfin 12 start.
