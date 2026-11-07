@@ -138,7 +138,8 @@ public static class Utils
 
 public sealed class KeyLock
 {
-    private readonly ConcurrentDictionary<Guid, SemaphoreSlim> _queues = new();
+    private readonly ConcurrentDictionary<Guid, (SemaphoreSlim Sem, int RefCount)> _queues = new();
+    private readonly object _queuesLock = new();
     private readonly ConcurrentDictionary<Guid, Lazy<Task>> _inflight = new();
 
     public Task RunSingleFlightAsync(
@@ -163,15 +164,31 @@ public sealed class KeyLock
         CancellationToken ct = default
     )
     {
-        var sem = _queues.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
-        await sem.WaitAsync(ct).ConfigureAwait(false);
+        SemaphoreSlim sem;
+        lock (_queuesLock)
+        {
+            if (_queues.TryGetValue(key, out var entry))
+            {
+                _queues[key] = (entry.Sem, entry.RefCount + 1);
+                sem = entry.Sem;
+            }
+            else
+            {
+                sem = new SemaphoreSlim(1, 1);
+                _queues[key] = (sem, 1);
+            }
+        }
+
+        var acquired = false;
         try
         {
+            await sem.WaitAsync(ct).ConfigureAwait(false);
+            acquired = true;
             await action(ct).ConfigureAwait(false);
         }
         finally
         {
-            ReleaseAndMaybeRemove(key, sem);
+            ReleaseAndMaybeRemove(key, acquired);
         }
     }
 
@@ -187,13 +204,27 @@ public sealed class KeyLock
         }
     }
 
-    private void ReleaseAndMaybeRemove(Guid key, SemaphoreSlim sem)
+    private void ReleaseAndMaybeRemove(Guid key, bool acquired)
     {
-        sem.Release();
-        if (sem.CurrentCount == 1 && sem.Wait(0))
+        lock (_queuesLock)
         {
-            sem.Release();
-            _queues.TryRemove(key, out _);
+            if (_queues.TryGetValue(key, out var entry))
+            {
+                if (acquired)
+                {
+                    entry.Sem.Release();
+                }
+
+                var nextCount = entry.RefCount - 1;
+                if (nextCount <= 0)
+                {
+                    _queues.TryRemove(key, out _);
+                }
+                else
+                {
+                    _queues[key] = (entry.Sem, nextCount);
+                }
+            }
         }
     }
 }

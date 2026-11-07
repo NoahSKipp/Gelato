@@ -171,6 +171,15 @@ public class GelatoPlugin : BasePlugin<PluginConfiguration>, IHasWebPages
         return await Instance.DiscoverInternalAsync(genre, types, page, language, ct).ConfigureAwait(false);
     }
 
+    private string MetadataLanguage()
+    {
+        var c = _serverConfig?.Configuration;
+        var lang = string.IsNullOrWhiteSpace(c?.PreferredMetadataLanguage) ? "en" : c.PreferredMetadataLanguage;
+        return string.IsNullOrWhiteSpace(c?.MetadataCountryCode) || lang.Contains('-')
+            ? lang
+            : lang + "-" + c.MetadataCountryCode.ToUpperInvariant();
+    }
+
     private async Task<List<BaseItemDto>> DiscoverInternalAsync(
         string? genre,
         string? types,
@@ -179,7 +188,7 @@ public class GelatoPlugin : BasePlugin<PluginConfiguration>, IHasWebPages
         CancellationToken ct
     )
     {
-        var cfg = GetConfig(Guid.Empty);
+        var cfg = Instance?.Configuration;
         var wantMovies = true;
         var wantSeries = true;
 
@@ -195,12 +204,12 @@ public class GelatoPlugin : BasePlugin<PluginConfiguration>, IHasWebPages
             }
         }
 
-        var lang = string.IsNullOrWhiteSpace(language) ? (_serverConfig?.Configuration.PreferredMetadataLanguage ?? "en-US") : language.Trim();
+        var lang = string.IsNullOrWhiteSpace(language) ? MetadataLanguage() : language.Trim();
         var p = page < 1 ? 1 : page;
         var result = await _tmdb!.DiscoverAsync(genre ?? string.Empty, wantMovies, wantSeries, lang, p, ct).ConfigureAwait(false);
 
         var metas = result.Metas;
-        if (cfg.FilterUnreleased)
+        if (cfg is { FilterUnreleased: true })
         {
             metas = metas.Where(m => m.IsReleased(cfg.FilterUnreleasedBufferDays)).ToList();
         }

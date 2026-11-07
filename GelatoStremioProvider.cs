@@ -35,6 +35,22 @@ public class GelatoStremioProvider(
         return null;
     }
 
+    private void PutCachedMeta(string id, StremioMeta meta, TimeSpan ttl)
+    {
+        var now = DateTime.UtcNow;
+        if (_metaCache.Count > 2000)
+        {
+            foreach (var kvp in _metaCache)
+            {
+                if (kvp.Value.Expiry <= now)
+                    _metaCache.TryRemove(kvp.Key, out _);
+            }
+            if (_metaCache.Count > 2000)
+                _metaCache.Clear();
+        }
+        _metaCache[id] = (meta, now.Add(ttl));
+    }
+
     private HttpClient NewClient()
     {
         var c = http.CreateClient(nameof(GelatoStremioProvider));
@@ -211,7 +227,7 @@ public class GelatoStremioProvider(
         var url = BuildUrl(["meta", mediaType.ToString().ToLower(), id]);
         var r = await GetJsonAsync<StremioMetaResponse>(url);
         if (r?.Meta is { } meta)
-            _metaCache[id] = (meta, DateTime.UtcNow.Add(ttl ?? MetaCacheTtl));
+            PutCachedMeta(id, meta, ttl ?? MetaCacheTtl);
         return r?.Meta;
     }
 
@@ -232,6 +248,41 @@ public class GelatoStremioProvider(
         return await GetMetaAsync(id, item.GetBaseItemKind().ToStremio()).ConfigureAwait(false);
     }
 
+    private static readonly Lazy<Func<string?>?> TmdbApiKeyGetter = new(() =>
+    {
+        try
+        {
+            // Avoid a hard compile-time dependency on MediaBrowser.Providers.
+            // Jellyfin.Providers is loaded at runtime - grab the key via reflection if available.
+            var pluginType = Type.GetType(
+                "MediaBrowser.Providers.Plugins.Tmdb.Plugin, Jellyfin.Providers",
+                throwOnError: false
+            );
+            var instanceProp = pluginType?.GetProperty("Instance");
+            if (instanceProp is null)
+                return null;
+
+            System.Reflection.PropertyInfo? cfgProp = null;
+            System.Reflection.PropertyInfo? keyProp = null;
+            return () =>
+            {
+                var instance = instanceProp.GetValue(null);
+                if (instance is null)
+                    return null;
+                cfgProp ??= instance.GetType().GetProperty("Configuration");
+                var cfg = cfgProp?.GetValue(instance);
+                if (cfg is null)
+                    return null;
+                keyProp ??= cfg.GetType().GetProperty("TmdbApiKey");
+                return keyProp?.GetValue(cfg) as string;
+            };
+        }
+        catch
+        {
+            return null;
+        }
+    });
+
     /// <summary>
     /// Fetches digital (type 4) release dates from TMDB for the given TMDB movie ID
     /// Uses the TMDB API key from the Jellyfin TMDB plugin if configured, otherwise falls back
@@ -242,15 +293,7 @@ public class GelatoStremioProvider(
         const string defaultKey = "4219e299c89411838049ab0dab19ebd5";
         try
         {
-            // Avoid a hard compile-time dependency on MediaBrowser.Providers.
-            // Jellyfin.Providers is loaded at runtime — grab the key via reflection if available.
-            var pluginType = Type.GetType(
-                "MediaBrowser.Providers.Plugins.Tmdb.Plugin, Jellyfin.Providers",
-                throwOnError: false
-            );
-            var instance = pluginType?.GetProperty("Instance")?.GetValue(null);
-            var cfg = instance?.GetType().GetProperty("Configuration")?.GetValue(instance);
-            var key = cfg?.GetType().GetProperty("TmdbApiKey")?.GetValue(cfg) as string;
+            var key = TmdbApiKeyGetter.Value?.Invoke();
             return string.IsNullOrWhiteSpace(key) ? defaultKey : key;
         }
         catch
@@ -458,7 +501,7 @@ public class GelatoStremioProvider(
     {
         var url = BuildUrl(["subtitles", mediaType.ToString().ToLower(), id]);
         var r = await GetJsonAsync<StremioSubtitleResponse>(url);
-        return r.Subtitles;
+        return r.Subtitles ?? [];
     }
 
     public async Task<IReadOnlyList<StremioMeta>> GetCatalogMetasAsync(

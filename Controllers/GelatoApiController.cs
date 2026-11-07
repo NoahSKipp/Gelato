@@ -44,8 +44,6 @@ public sealed class GelatoApiController : ControllerBase
     private readonly NzbdavPresence _nzbdav;
     private readonly WarmupGate _gate;
     private readonly BackgroundWriteGate _writeGate;
-    private readonly TmdbSearch _tmdb;
-    private readonly IServerConfigurationManager _serverConfig;
     private readonly string _downloadPath;
 
     private static readonly SlidingWindowLimiter BatchLimiter = new(
@@ -71,13 +69,9 @@ public sealed class GelatoApiController : ControllerBase
         WarmTracker warm,
         NzbdavPresence nzbdav,
         WarmupGate gate,
-        BackgroundWriteGate writeGate,
-        TmdbSearch tmdb,
-        IServerConfigurationManager serverConfig
+        BackgroundWriteGate writeGate
     )
     {
-        _tmdb = tmdb;
-        _serverConfig = serverConfig;
         _warm = warm;
         _nzbdav = nzbdav;
         _gate = gate;
@@ -147,15 +141,6 @@ public sealed class GelatoApiController : ControllerBase
 
         var dtos = await GelatoPlugin.DiscoverAsync(genre, typesParam, page, language, ct).ConfigureAwait(false);
         return Ok(dtos);
-    }
-
-    private string MetadataLanguage()
-    {
-        var c = _serverConfig?.Configuration;
-        var lang = string.IsNullOrWhiteSpace(c?.PreferredMetadataLanguage) ? "en" : c.PreferredMetadataLanguage;
-        return string.IsNullOrWhiteSpace(c?.MetadataCountryCode) || lang.Contains('-')
-            ? lang
-            : lang + "-" + c.MetadataCountryCode.ToUpperInvariant();
     }
 
     // Card-open today blocks on SyncStreams (a network round trip to the
@@ -553,6 +538,26 @@ public sealed class GelatoApiController : ControllerBase
             }
 
             if (
+                string.IsNullOrWhiteSpace(stremioMeta.ImdbId)
+                && stremioMeta.Id.StartsWith("tmdb:", StringComparison.OrdinalIgnoreCase)
+            )
+            {
+                var tmdbStr = stremioMeta.Id["tmdb:".Length..];
+                if (int.TryParse(tmdbStr, out var tmdbInt))
+                {
+                    var kind = isSeries ? "tv" : "movie";
+                    var resolvedImdb = await GelatoPlugin
+                        .Instance!.ResolveImdbIdAsync(kind, tmdbInt, CancellationToken.None)
+                        .ConfigureAwait(false);
+                    if (!string.IsNullOrWhiteSpace(resolvedImdb))
+                    {
+                        stremioMeta.ImdbId = resolvedImdb;
+                        _gelatoManager.SaveStremioMeta(itemId, stremioMeta);
+                    }
+                }
+            }
+
+            if (
                 _gelatoManager.IntoBaseItem(stremioMeta) is { } candidate
                 && _gelatoManager.FindExistingItem(candidate, user) is { } existing
             )
@@ -563,8 +568,11 @@ public sealed class GelatoApiController : ControllerBase
             }
 
             var cfg = GelatoPlugin.Instance!.GetConfig(userId);
+            var metaId = !string.IsNullOrWhiteSpace(stremioMeta.ImdbId)
+                ? stremioMeta.ImdbId
+                : stremioMeta.Id;
             var meta = await cfg
-                .Stremio.GetMetaAsync(stremioMeta.ImdbId ?? stremioMeta.Id, stremioMeta.Type)
+                .Stremio.GetMetaAsync(metaId, stremioMeta.Type)
                 .ConfigureAwait(false);
             if (meta is null)
             {
@@ -583,10 +591,6 @@ public sealed class GelatoApiController : ControllerBase
                 inserted = await _insertActionFilter
                     .InsertMetaAsync(itemId, root, meta, user)
                     .ConfigureAwait(false);
-            }
-            if (inserted is not null)
-            {
-                _gelatoManager.RemoveStremioMeta(itemId);
             }
             return inserted;
         }

@@ -83,6 +83,26 @@ public class InsertActionFilter(
             return;
         }
 
+        if (
+            string.IsNullOrWhiteSpace(stremioMeta.ImdbId)
+            && stremioMeta.Id.StartsWith("tmdb:", StringComparison.OrdinalIgnoreCase)
+        )
+        {
+            var tmdbStr = stremioMeta.Id["tmdb:".Length..];
+            if (int.TryParse(tmdbStr, out var tmdbInt))
+            {
+                var kind = isSeries ? "tv" : "movie";
+                var resolvedImdb = await GelatoPlugin
+                    .Instance!.ResolveImdbIdAsync(kind, tmdbInt, ctx.HttpContext.RequestAborted)
+                    .ConfigureAwait(false);
+                if (!string.IsNullOrWhiteSpace(resolvedImdb))
+                {
+                    stremioMeta.ImdbId = resolvedImdb;
+                    manager.SaveStremioMeta(guid, stremioMeta);
+                }
+            }
+        }
+
         IReadOnlyDictionary<string, string>? checkedIds = null;
         if (manager.IntoBaseItem(stremioMeta) is { } item)
         {
@@ -104,22 +124,9 @@ public class InsertActionFilter(
 
         // Fetch full metadata
         var cfg = GelatoPlugin.Instance!.GetConfig(userId);
-        var metaId = stremioMeta.ImdbId ?? stremioMeta.Id;
-        if (metaId.StartsWith("tmdb:", StringComparison.OrdinalIgnoreCase) && string.IsNullOrWhiteSpace(stremioMeta.ImdbId))
-        {
-            var tmdbStr = metaId["tmdb:".Length..];
-            if (int.TryParse(tmdbStr, out var tmdbInt))
-            {
-                var kind = stremioMeta.Type == StremioMediaType.Movie ? "movie" : "tv";
-                var resolvedImdb = await GelatoPlugin.Instance.ResolveImdbIdAsync(kind, tmdbInt, ctx.HttpContext.RequestAborted).ConfigureAwait(false);
-                if (!string.IsNullOrWhiteSpace(resolvedImdb))
-                {
-                    stremioMeta.ImdbId = resolvedImdb;
-                    metaId = resolvedImdb;
-                }
-            }
-        }
-
+        var metaId = !string.IsNullOrWhiteSpace(stremioMeta.ImdbId)
+            ? stremioMeta.ImdbId
+            : stremioMeta.Id;
         var meta = await cfg.Stremio.GetMetaAsync(
             metaId,
             stremioMeta.Type
@@ -204,7 +211,6 @@ public class InsertActionFilter(
             guid,
             async ct =>
             {
-                meta.Guid = guid;
                 (baseItem, created) = await manager.InsertMeta(
                     root,
                     meta,

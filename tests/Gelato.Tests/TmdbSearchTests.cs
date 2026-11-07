@@ -68,15 +68,16 @@ public class TmdbSearchTests
         var fake = new Fake { Answer = p => Tmdb(p, 1000) };
         var r = await Make(fake).SearchAsync("Heat", true, true, "de-DE", CancellationToken.None);
         Assert.True(r.Ok);
-        Assert.Equal(["tt0001001", "tt0001002", "tt0001007"], r.Metas.Select(m => m.Id));
+        Assert.Equal(["tt0001001", "tt0001002", "tmdb:1003", "tt0001007"], r.Metas.Select(m => m.Id));
         var heat = r.Metas[0];
         Assert.Equal(StremioMediaType.Movie, heat.Type);
         Assert.Equal("tt0001001", heat.ImdbId);
         Assert.Equal("Heat 1001", heat.GetName());
         Assert.Equal("https://image.tmdb.org/t/p/w500/p1001.jpg", heat.Poster);
         Assert.Equal(1995, heat.GetYear());
-        Assert.Equal(StremioMediaType.Series, r.Metas[2].Type);
-        Assert.Equal("Heat Show 1007", r.Metas[2].GetName());
+        Assert.Null(r.Metas[2].ImdbId);
+        Assert.Equal(StremioMediaType.Series, r.Metas[3].Type);
+        Assert.Equal("Heat Show 1007", r.Metas[3].GetName());
     }
 
     [Fact]

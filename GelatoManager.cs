@@ -115,7 +115,7 @@ public sealed class GelatoManager(
     public DateTime? StreamSyncedAt(string guid) =>
         _streamSyncs.TryGet(guid, out var at) ? at : null;
 
-    private readonly ConcurrentDictionary<Guid, (DateTime At, StremioMeta Meta)> _persistentMeta = new();
+    private readonly ConcurrentDictionary<Guid, (DateTime SavedAt, StremioMeta Meta)> _persistentMeta = new();
     private const int MaxPersistentMeta = 20000;
     private static readonly TimeSpan PersistentMetaTtl = TimeSpan.FromDays(7);
 
@@ -126,14 +126,14 @@ public sealed class GelatoManager(
         if (_persistentMeta.Count >= MaxPersistentMeta)
         {
             var now = DateTime.UtcNow;
-            foreach (var stale in _persistentMeta.Where(e => now - e.Value.At >= PersistentMetaTtl).Select(e => e.Key).Take(1000).ToList())
+            foreach (var stale in _persistentMeta.Where(e => now - e.Value.SavedAt >= PersistentMetaTtl).Select(e => e.Key).Take(1000).ToList())
             {
                 _persistentMeta.TryRemove(stale, out _);
             }
 
             if (_persistentMeta.Count >= MaxPersistentMeta)
             {
-                var oldestKeys = _persistentMeta.OrderBy(e => e.Value.At).Select(e => e.Key).Take(500).ToList();
+                var oldestKeys = _persistentMeta.OrderBy(e => e.Value.SavedAt).Select(e => e.Key).Take(500).ToList();
                 foreach (var k in oldestKeys)
                 {
                     _persistentMeta.TryRemove(k, out _);
@@ -153,9 +153,14 @@ public sealed class GelatoManager(
 
         if (_persistentMeta.TryGetValue(guid, out var entry))
         {
-            // Repopulate memoryCache for quick subsequent lookups
-            memoryCache.Set($"meta:{guid}", entry.Meta, TimeSpan.FromMinutes(360));
-            return entry.Meta;
+            if (DateTime.UtcNow - entry.SavedAt <= PersistentMetaTtl)
+            {
+                // Repopulate memoryCache for quick subsequent lookups
+                memoryCache.Set($"meta:{guid}", entry.Meta, TimeSpan.FromMinutes(360));
+                return entry.Meta;
+            }
+
+            _persistentMeta.TryRemove(guid, out _);
         }
 
         return null;
@@ -173,6 +178,8 @@ public sealed class GelatoManager(
         {
             cache.Compact(1.0);
         }
+
+        _persistentMeta.Clear();
 
         // The sync markers outlive a restart; after a purge they would mark
         // titles with no stream rows left as synced, and Play found nothing
@@ -740,6 +747,10 @@ public sealed class GelatoManager(
 
         var cfg = GelatoPlugin.Instance!.GetConfig(userId);
         var stremio = cfg.Stremio;
+        if (stremio is null)
+        {
+            return 0;
+        }
         var streams = await stremio.GetStreamsAsync(uri).ConfigureAwait(false);
         var httpPort = GetHttpPort();
 
@@ -923,7 +934,7 @@ public sealed class GelatoManager(
             streamItem.LockedFields = locked.ToArray();
 
             streamItem.ProviderIds = streamProviderIds;
-            streamItem.RunTimeTicks = video.RunTimeTicks ?? video.RunTimeTicks;
+            streamItem.RunTimeTicks = video.RunTimeTicks ?? item.RunTimeTicks;
             streamItem.LinkedAlternateVersions = [];
             streamItem.SetPrimaryVersionId(null);
             streamItem.PremiereDate = video.PremiereDate;

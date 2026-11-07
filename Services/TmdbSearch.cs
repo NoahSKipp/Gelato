@@ -106,6 +106,7 @@ public sealed class TmdbSearch(IHttpClientFactory http, ILogger<TmdbSearch> log)
         ["Romance"] = 10749,
         ["Sci-Fi"] = 878,
         ["Science Fiction"] = 878,
+        ["Science-Fiction"] = 878,
         ["Sci Fi"] = 878,
         ["SciFi"] = 878,
         ["Thriller"] = 53,
@@ -153,7 +154,9 @@ public sealed class TmdbSearch(IHttpClientFactory http, ILogger<TmdbSearch> log)
         ["Misterio"] = 9648,
         ["Película de TV"] = 10770,
         ["Suspense"] = 53,
-        ["Bélica"] = 10752
+        ["Bélica"] = 10752,
+        ["Guerra"] = 10752,
+        ["Ciencia ficción"] = 878
     };
 
     private static readonly Dictionary<string, int> TvGenres = new(StringComparer.OrdinalIgnoreCase)
@@ -176,6 +179,7 @@ public sealed class TmdbSearch(IHttpClientFactory http, ILogger<TmdbSearch> log)
         ["Sci-Fi & Fantasy"] = 10765,
         ["Sci-Fi"] = 10765,
         ["Science Fiction"] = 10765,
+        ["Science-Fiction"] = 10765,
         ["Sci Fi"] = 10765,
         ["SciFi"] = 10765,
         ["Soap"] = 10766,
@@ -191,6 +195,7 @@ public sealed class TmdbSearch(IHttpClientFactory http, ILogger<TmdbSearch> log)
         ["Krimi"] = 80,
         ["Dokumentation"] = 99,
         ["Familie"] = 10751,
+        ["Krieg"] = 10768,
         ["Musik"] = 10402,
         ["Zeichentrick"] = 16,
         // Common French localized genre names
@@ -201,6 +206,7 @@ public sealed class TmdbSearch(IHttpClientFactory http, ILogger<TmdbSearch> log)
         ["Drame"] = 18,
         ["Familial"] = 10751,
         ["Fantastique"] = 10765,
+        ["Guerre"] = 10768,
         ["Mystère"] = 9648,
         // Common Spanish localized genre names
         ["Acción"] = 10759,
@@ -212,25 +218,41 @@ public sealed class TmdbSearch(IHttpClientFactory http, ILogger<TmdbSearch> log)
         ["Documental"] = 99,
         ["Familia"] = 10751,
         ["Fantasía"] = 10765,
-        ["Misterio"] = 9648
+        ["Ciencia ficción"] = 10765,
+        ["Misterio"] = 9648,
+        ["Guerra"] = 10768,
+        ["Bélica"] = 10768
     };
 
-    public static int? GetMovieGenreId(string genre)
-    {
-        if (string.IsNullOrWhiteSpace(genre)) return null;
-        var trimmed = genre.Trim();
-        if (MovieGenres.TryGetValue(trimmed, out var id)) return id;
-        if (int.TryParse(trimmed, out var parsed)) return parsed;
-        return null;
-    }
+    public static string? GetMovieGenreId(string genre) => ResolveGenreIds(genre, MovieGenres);
 
-    public static int? GetTvGenreId(string genre)
+    public static string? GetTvGenreId(string genre) => ResolveGenreIds(genre, TvGenres);
+
+    private static string? ResolveGenreIds(string genre, Dictionary<string, int> map)
     {
         if (string.IsNullOrWhiteSpace(genre)) return null;
         var trimmed = genre.Trim();
-        if (TvGenres.TryGetValue(trimmed, out var id)) return id;
-        if (int.TryParse(trimmed, out var parsed)) return parsed;
-        return null;
+        if (map.TryGetValue(trimmed, out var singleId)) return singleId.ToString(CultureInfo.InvariantCulture);
+        if (int.TryParse(trimmed, out var parsedSingle)) return parsedSingle.ToString(CultureInfo.InvariantCulture);
+
+        if (!trimmed.Contains(',')) return null;
+
+        var ids = new List<string>();
+        foreach (var part in trimmed.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (map.TryGetValue(part, out var id))
+            {
+                var s = id.ToString(CultureInfo.InvariantCulture);
+                if (!ids.Contains(s)) ids.Add(s);
+            }
+            else if (int.TryParse(part, out var parsed))
+            {
+                var s = parsed.ToString(CultureInfo.InvariantCulture);
+                if (!ids.Contains(s)) ids.Add(s);
+            }
+        }
+
+        return ids.Count > 0 ? string.Join(",", ids) : null;
     }
 
     public async Task<Result> DiscoverAsync(
@@ -253,18 +275,18 @@ public sealed class TmdbSearch(IHttpClientFactory http, ILogger<TmdbSearch> log)
         var movieGenreId = filterByGenre ? GetMovieGenreId(genre) : null;
         var tvGenreId = filterByGenre ? GetTvGenreId(genre) : null;
 
-        var queryMovies = movies && (!filterByGenre || movieGenreId.HasValue);
-        var queryTv = series && (!filterByGenre || tvGenreId.HasValue);
+        var queryMovies = movies && (!filterByGenre || movieGenreId is not null);
+        var queryTv = series && (!filterByGenre || tvGenreId is not null);
 
         if (!queryMovies && !queryTv)
         {
             return new Result(true, [], timings.ToList());
         }
 
-        async Task<(bool Ok, List<Hit> Hits)> DiscoverPage(string kind, int? genreId)
+        async Task<(bool Ok, List<Hit> Hits)> DiscoverPage(string kind, string? genreId)
         {
             var started = sw.ElapsedMilliseconds;
-            var genreParam = genreId.HasValue ? $"with_genres={genreId.Value}&" : "";
+            var genreParam = !string.IsNullOrEmpty(genreId) ? $"with_genres={genreId}&" : "";
             var today = DateTime.UtcNow.ToString("yyyy-MM-dd");
             var dateParam = kind == "movie" ? $"primary_release_date.lte={today}&" : $"first_air_date.lte={today}&";
             var url = $"{ApiBase}/discover/{kind}?{genreParam}{dateParam}language={language}&include_adult=false&sort_by=popularity.desc&page={targetPage}&api_key={key}";
@@ -331,16 +353,12 @@ public sealed class TmdbSearch(IHttpClientFactory http, ILogger<TmdbSearch> log)
                 Interlocked.Increment(ref cached);
                 return hit.Imdb;
             }
-            await gate.WaitAsync(idBudget.Token).ConfigureAwait(false);
+            var acquired = false;
             try
             {
-                var body = await Client()
-                    .GetStringAsync($"{ApiBase}/{c.Kind}/{c.Hit.Id}/external_ids?api_key={key}", idBudget.Token)
-                    .ConfigureAwait(false);
-                var imdb = JsonSerializer.Deserialize<ExternalIds>(body, Json)?.ImdbId;
-                imdb = string.IsNullOrWhiteSpace(imdb) ? null : imdb;
-                Remember(cacheKey, imdb);
-                return imdb;
+                await gate.WaitAsync(idBudget.Token).ConfigureAwait(false);
+                acquired = true;
+                return await FetchImdbIdAsync(c.Kind, c.Hit.Id, key, cacheKey, idBudget.Token, ct).ConfigureAwait(false);
             }
             catch (Exception) when (!ct.IsCancellationRequested)
             {
@@ -348,16 +366,19 @@ public sealed class TmdbSearch(IHttpClientFactory http, ILogger<TmdbSearch> log)
             }
             finally
             {
-                gate.Release();
+                if (acquired)
+                {
+                    gate.Release();
+                }
             }
-        }).Select(t => t.ContinueWith(r => r.IsCompletedSuccessfully ? r.Result : null, TaskScheduler.Default))).ConfigureAwait(false);
+        })).ConfigureAwait(false);
         ct.ThrowIfCancellationRequested();
 
-        var metas = new List<StremioMeta>();
+        var metas = new List<StremioMeta>(candidates.Count);
         for (var i = 0; i < candidates.Count; i++)
         {
-            if (resolved[i] is { } imdb)
-                metas.Add(ToMeta(candidates[i].Kind, candidates[i].Hit, imdb));
+            var id = resolved[i] ?? ("tmdb:" + candidates[i].Hit.Id);
+            metas.Add(ToMeta(candidates[i].Kind, candidates[i].Hit, id));
         }
         timings.Enqueue(
             $"imdb ids {sw.ElapsedMilliseconds - idStarted} ms ({metas.Count} of {candidates.Count}, {cached} cached)"
@@ -374,17 +395,31 @@ public sealed class TmdbSearch(IHttpClientFactory http, ILogger<TmdbSearch> log)
         }
 
         var key = GelatoStremioProvider.GetTmdbApiKey();
+        using var idBudget = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        idBudget.CancelAfter(IdBudget);
+        return await FetchImdbIdAsync(kind, tmdbId, key, cacheKey, idBudget.Token, ct).ConfigureAwait(false);
+    }
+
+    private async Task<string?> FetchImdbIdAsync(
+        string kind,
+        int tmdbId,
+        string key,
+        string cacheKey,
+        CancellationToken requestCt,
+        CancellationToken callerCt
+    )
+    {
         try
         {
             var body = await Client()
-                .GetStringAsync($"{ApiBase}/{kind}/{tmdbId}/external_ids?api_key={key}", ct)
+                .GetStringAsync($"{ApiBase}/{kind}/{tmdbId}/external_ids?api_key={key}", requestCt)
                 .ConfigureAwait(false);
             var imdb = JsonSerializer.Deserialize<ExternalIds>(body, Json)?.ImdbId;
             imdb = string.IsNullOrWhiteSpace(imdb) ? null : imdb;
             Remember(cacheKey, imdb);
             return imdb;
         }
-        catch (Exception) when (!ct.IsCancellationRequested)
+        catch (Exception) when (!callerCt.IsCancellationRequested)
         {
             return null;
         }
@@ -404,7 +439,7 @@ public sealed class TmdbSearch(IHttpClientFactory http, ILogger<TmdbSearch> log)
         ImdbIds[key] = (DateTime.UtcNow, imdb);
     }
 
-    public static StremioMeta ToMeta(string kind, Hit hit, string imdb)
+    public static StremioMeta ToMeta(string kind, Hit hit, string id)
     {
         var date = kind == "movie" ? hit.ReleaseDate : hit.FirstAirDate;
         DateTime? released = DateTime.TryParseExact(
@@ -418,8 +453,8 @@ public sealed class TmdbSearch(IHttpClientFactory http, ILogger<TmdbSearch> log)
             : null;
         return new StremioMeta
         {
-            Id = imdb,
-            ImdbId = imdb,
+            Id = id,
+            ImdbId = id.StartsWith("tt", StringComparison.OrdinalIgnoreCase) ? id : null,
             Type = kind == "movie" ? StremioMediaType.Movie : StremioMediaType.Series,
             Name = kind == "movie" ? hit.Title : hit.Name,
             Description = string.IsNullOrWhiteSpace(hit.Overview) ? null : hit.Overview,

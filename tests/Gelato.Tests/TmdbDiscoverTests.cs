@@ -88,42 +88,85 @@ public class TmdbDiscoverTests
     public void GenreIdLookupMapsAllSpecifiedGenres()
     {
         // Movie genres
-        Assert.Equal(28, TmdbSearch.GetMovieGenreId("Action"));
-        Assert.Equal(12, TmdbSearch.GetMovieGenreId("Adventure"));
-        Assert.Equal(16, TmdbSearch.GetMovieGenreId("Animation"));
-        Assert.Equal(35, TmdbSearch.GetMovieGenreId("Comedy"));
-        Assert.Equal(80, TmdbSearch.GetMovieGenreId("Crime"));
-        Assert.Equal(99, TmdbSearch.GetMovieGenreId("Documentary"));
-        Assert.Equal(18, TmdbSearch.GetMovieGenreId("Drama"));
-        Assert.Equal(10751, TmdbSearch.GetMovieGenreId("Family"));
-        Assert.Equal(14, TmdbSearch.GetMovieGenreId("Fantasy"));
-        Assert.Equal(36, TmdbSearch.GetMovieGenreId("History"));
-        Assert.Equal(27, TmdbSearch.GetMovieGenreId("Horror"));
-        Assert.Equal(10402, TmdbSearch.GetMovieGenreId("Music"));
-        Assert.Equal(9648, TmdbSearch.GetMovieGenreId("Mystery"));
-        Assert.Equal(10749, TmdbSearch.GetMovieGenreId("Romance"));
-        Assert.Equal(878, TmdbSearch.GetMovieGenreId("Sci-Fi"));
-        Assert.Equal(878, TmdbSearch.GetMovieGenreId("Science Fiction"));
-        Assert.Equal(53, TmdbSearch.GetMovieGenreId("Thriller"));
-        Assert.Equal(10752, TmdbSearch.GetMovieGenreId("War"));
-        Assert.Equal(37, TmdbSearch.GetMovieGenreId("Western"));
+        Assert.Equal("28", TmdbSearch.GetMovieGenreId("Action"));
+        Assert.Equal("12", TmdbSearch.GetMovieGenreId("Adventure"));
+        Assert.Equal("16", TmdbSearch.GetMovieGenreId("Animation"));
+        Assert.Equal("35", TmdbSearch.GetMovieGenreId("Comedy"));
+        Assert.Equal("80", TmdbSearch.GetMovieGenreId("Crime"));
+        Assert.Equal("99", TmdbSearch.GetMovieGenreId("Documentary"));
+        Assert.Equal("18", TmdbSearch.GetMovieGenreId("Drama"));
+        Assert.Equal("10751", TmdbSearch.GetMovieGenreId("Family"));
+        Assert.Equal("14", TmdbSearch.GetMovieGenreId("Fantasy"));
+        Assert.Equal("36", TmdbSearch.GetMovieGenreId("History"));
+        Assert.Equal("27", TmdbSearch.GetMovieGenreId("Horror"));
+        Assert.Equal("10402", TmdbSearch.GetMovieGenreId("Music"));
+        Assert.Equal("9648", TmdbSearch.GetMovieGenreId("Mystery"));
+        Assert.Equal("10749", TmdbSearch.GetMovieGenreId("Romance"));
+        Assert.Equal("878", TmdbSearch.GetMovieGenreId("Sci-Fi"));
+        Assert.Equal("878", TmdbSearch.GetMovieGenreId("Science Fiction"));
+        Assert.Equal("878", TmdbSearch.GetMovieGenreId("Science-Fiction"));
+        Assert.Equal("53", TmdbSearch.GetMovieGenreId("Thriller"));
+        Assert.Equal("10752", TmdbSearch.GetMovieGenreId("War"));
+        Assert.Equal("37", TmdbSearch.GetMovieGenreId("Western"));
+        Assert.Equal("28,12", TmdbSearch.GetMovieGenreId("Action, Adventure"));
 
         // TV genres
-        Assert.Equal(10759, TmdbSearch.GetTvGenreId("Action"));
-        Assert.Equal(10759, TmdbSearch.GetTvGenreId("Action & Adventure"));
-        Assert.Equal(16, TmdbSearch.GetTvGenreId("Animation"));
-        Assert.Equal(35, TmdbSearch.GetTvGenreId("Comedy"));
-        Assert.Equal(80, TmdbSearch.GetTvGenreId("Crime"));
-        Assert.Equal(99, TmdbSearch.GetTvGenreId("Documentary"));
-        Assert.Equal(18, TmdbSearch.GetTvGenreId("Drama"));
-        Assert.Equal(10751, TmdbSearch.GetTvGenreId("Family"));
-        Assert.Equal(10765, TmdbSearch.GetTvGenreId("Fantasy"));
-        Assert.Equal(10765, TmdbSearch.GetTvGenreId("Sci-Fi & Fantasy"));
-        Assert.Equal(10765, TmdbSearch.GetTvGenreId("Sci-Fi"));
-        Assert.Equal(9648, TmdbSearch.GetTvGenreId("Mystery"));
-        Assert.Equal(10768, TmdbSearch.GetTvGenreId("War"));
-        Assert.Equal(10768, TmdbSearch.GetTvGenreId("War & Politics"));
-        Assert.Equal(37, TmdbSearch.GetTvGenreId("Western"));
+        Assert.Equal("10759", TmdbSearch.GetTvGenreId("Action"));
+        Assert.Equal("10759", TmdbSearch.GetTvGenreId("Action & Adventure"));
+        Assert.Equal("16", TmdbSearch.GetTvGenreId("Animation"));
+        Assert.Equal("35", TmdbSearch.GetTvGenreId("Comedy"));
+        Assert.Equal("80", TmdbSearch.GetTvGenreId("Crime"));
+        Assert.Equal("99", TmdbSearch.GetTvGenreId("Documentary"));
+        Assert.Equal("18", TmdbSearch.GetTvGenreId("Drama"));
+        Assert.Equal("10751", TmdbSearch.GetTvGenreId("Family"));
+        Assert.Equal("10765", TmdbSearch.GetTvGenreId("Fantasy"));
+        Assert.Equal("10765", TmdbSearch.GetTvGenreId("Sci-Fi & Fantasy"));
+        Assert.Equal("10765", TmdbSearch.GetTvGenreId("Sci-Fi"));
+        Assert.Equal("10765", TmdbSearch.GetTvGenreId("Science-Fiction"));
+        Assert.Equal("10765", TmdbSearch.GetTvGenreId("Ciencia ficción"));
+        Assert.Equal("9648", TmdbSearch.GetTvGenreId("Mystery"));
+        Assert.Equal("10768", TmdbSearch.GetTvGenreId("War"));
+        Assert.Equal("10768", TmdbSearch.GetTvGenreId("War & Politics"));
+        Assert.Equal("10768", TmdbSearch.GetTvGenreId("Krieg"));
+        Assert.Equal("10768", TmdbSearch.GetTvGenreId("Guerre"));
+        Assert.Equal("10768", TmdbSearch.GetTvGenreId("Guerra"));
+        Assert.Equal("10768", TmdbSearch.GetTvGenreId("Bélica"));
+        Assert.Equal("37", TmdbSearch.GetTvGenreId("Western"));
+        Assert.Equal("35,18", TmdbSearch.GetTvGenreId("Comedy, Drama"));
+    }
+
+    [Fact]
+    public async Task DiscoverFallsBackToTmdbIdWhenImdbIdIsMissing()
+    {
+        TmdbSearch.ApiBase = "http://tmdb.test/3";
+        var fake = new Fake
+        {
+            Answer = r =>
+            {
+                var path = r.RequestUri!.AbsolutePath;
+                if (path.EndsWith("/discover/movie"))
+                {
+                    return (HttpStatusCode.OK, Page("movie", 901, 902));
+                }
+                if (path.EndsWith("/external_ids"))
+                {
+                    var id = int.Parse(path.Split('/')[^2]);
+                    return id == 901
+                        ? (HttpStatusCode.OK, "{\"imdb_id\":null}")
+                        : (HttpStatusCode.OK, "{\"imdb_id\":\"tt0000902\"}");
+                }
+                return (HttpStatusCode.NotFound, "");
+            }
+        };
+        var search = Make(fake);
+
+        var r = await search.DiscoverAsync("Action", true, false, "en-US", 1, CancellationToken.None);
+        Assert.True(r.Ok);
+        Assert.Equal(2, r.Metas.Count);
+        Assert.Equal("tmdb:901", r.Metas[0].Id);
+        Assert.Null(r.Metas[0].ImdbId);
+        Assert.Equal("tt0000902", r.Metas[1].Id);
+        Assert.Equal("tt0000902", r.Metas[1].ImdbId);
     }
 
     [Fact]
