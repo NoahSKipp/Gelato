@@ -104,8 +104,24 @@ public class InsertActionFilter(
 
         // Fetch full metadata
         var cfg = GelatoPlugin.Instance!.GetConfig(userId);
+        var metaId = stremioMeta.ImdbId ?? stremioMeta.Id;
+        if (metaId.StartsWith("tmdb:", StringComparison.OrdinalIgnoreCase) && string.IsNullOrWhiteSpace(stremioMeta.ImdbId))
+        {
+            var tmdbStr = metaId["tmdb:".Length..];
+            if (int.TryParse(tmdbStr, out var tmdbInt))
+            {
+                var kind = stremioMeta.Type == StremioMediaType.Movie ? "movie" : "tv";
+                var resolvedImdb = await GelatoPlugin.Instance.ResolveImdbIdAsync(kind, tmdbInt, ctx.HttpContext.RequestAborted).ConfigureAwait(false);
+                if (!string.IsNullOrWhiteSpace(resolvedImdb))
+                {
+                    stremioMeta.ImdbId = resolvedImdb;
+                    metaId = resolvedImdb;
+                }
+            }
+        }
+
         var meta = await cfg.Stremio.GetMetaAsync(
-            stremioMeta.ImdbId ?? stremioMeta.Id,
+            metaId,
             stremioMeta.Type
         );
         steps.Mark("meta");

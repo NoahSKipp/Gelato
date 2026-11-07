@@ -131,77 +131,21 @@ public sealed class GelatoApiController : ControllerBase
         CancellationToken ct
     )
     {
-        HttpContext.TryGetUserId(out var userId);
-        var cfg = GelatoPlugin.Instance!.GetConfig(userId);
-
-        var wantMovies = true;
-        var wantSeries = true;
-
+        var typesParam = types;
         if (!string.IsNullOrWhiteSpace(mediaType))
         {
             var m = mediaType.Trim();
             if (m.Equals("movie", StringComparison.OrdinalIgnoreCase) || m.Equals("movies", StringComparison.OrdinalIgnoreCase))
             {
-                wantMovies = true;
-                wantSeries = false;
+                typesParam = "movie";
             }
             else if (m.Equals("series", StringComparison.OrdinalIgnoreCase) || m.Equals("tv", StringComparison.OrdinalIgnoreCase) || m.Equals("show", StringComparison.OrdinalIgnoreCase) || m.Equals("shows", StringComparison.OrdinalIgnoreCase))
             {
-                wantMovies = false;
-                wantSeries = true;
-            }
-        }
-        else if (!string.IsNullOrWhiteSpace(types))
-        {
-            var t = types.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            var hasMovie = t.Any(x => x.Equals("movie", StringComparison.OrdinalIgnoreCase) || x.Equals("movies", StringComparison.OrdinalIgnoreCase));
-            var hasSeries = t.Any(x => x.Equals("series", StringComparison.OrdinalIgnoreCase) || x.Equals("tv", StringComparison.OrdinalIgnoreCase) || x.Equals("show", StringComparison.OrdinalIgnoreCase) || x.Equals("shows", StringComparison.OrdinalIgnoreCase));
-            if (hasMovie || hasSeries)
-            {
-                wantMovies = hasMovie;
-                wantSeries = hasSeries;
+                typesParam = "series";
             }
         }
 
-        var lang = string.IsNullOrWhiteSpace(language) ? MetadataLanguage() : language.Trim();
-        var p = page < 1 ? 1 : page;
-        var result = await _tmdb.DiscoverAsync(genre ?? string.Empty, wantMovies, wantSeries, lang, p, ct).ConfigureAwait(false);
-
-        var metas = result.Metas;
-        if (cfg.FilterUnreleased)
-        {
-            metas = metas.Where(m => m.IsReleased(cfg.FilterUnreleasedBufferDays)).ToList();
-        }
-
-        var options = new DtoOptions(false)
-        {
-            Fields = SearchActionFilter.ResultFields,
-            EnableImages = true,
-            EnableUserData = false,
-        };
-
-        var dtos = new List<BaseItemDto>(metas.Count);
-        foreach (var meta in metas)
-        {
-            if (ct.IsCancellationRequested)
-            {
-                break;
-            }
-
-            var baseItem = _gelatoManager.IntoBaseItem(meta);
-            if (baseItem is null)
-            {
-                continue;
-            }
-
-            var dto = _dtoService.GetBaseItemDto(baseItem, options);
-            SearchActionFilter.FillSkippedFields(dto, baseItem);
-            var stremioUri = StremioUri.FromBaseItem(baseItem);
-            dto.Id = stremioUri.ToGuid();
-            _gelatoManager.SaveStremioMeta(dto.Id, meta);
-            dtos.Add(dto);
-        }
-
+        var dtos = await GelatoPlugin.DiscoverAsync(genre, typesParam, page, language, ct).ConfigureAwait(false);
         return Ok(dtos);
     }
 

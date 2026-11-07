@@ -265,7 +265,9 @@ public sealed class TmdbSearch(IHttpClientFactory http, ILogger<TmdbSearch> log)
         {
             var started = sw.ElapsedMilliseconds;
             var genreParam = genreId.HasValue ? $"with_genres={genreId.Value}&" : "";
-            var url = $"{ApiBase}/discover/{kind}?{genreParam}language={language}&include_adult=false&sort_by=popularity.desc&page={targetPage}&api_key={key}";
+            var today = DateTime.UtcNow.ToString("yyyy-MM-dd");
+            var dateParam = kind == "movie" ? $"primary_release_date.lte={today}&" : $"first_air_date.lte={today}&";
+            var url = $"{ApiBase}/discover/{kind}?{genreParam}{dateParam}language={language}&include_adult=false&sort_by=popularity.desc&page={targetPage}&api_key={key}";
             try
             {
                 var body = await Client().GetStringAsync(url, budget.Token).ConfigureAwait(false);
@@ -361,6 +363,31 @@ public sealed class TmdbSearch(IHttpClientFactory http, ILogger<TmdbSearch> log)
             $"imdb ids {sw.ElapsedMilliseconds - idStarted} ms ({metas.Count} of {candidates.Count}, {cached} cached)"
         );
         return metas;
+    }
+
+    public async Task<string?> GetImdbIdAsync(string kind, int tmdbId, CancellationToken ct = default)
+    {
+        var cacheKey = kind + ":" + tmdbId;
+        if (ImdbIds.TryGetValue(cacheKey, out var hit) && DateTime.UtcNow - hit.At < IdTtl)
+        {
+            return hit.Imdb;
+        }
+
+        var key = GelatoStremioProvider.GetTmdbApiKey();
+        try
+        {
+            var body = await Client()
+                .GetStringAsync($"{ApiBase}/{kind}/{tmdbId}/external_ids?api_key={key}", ct)
+                .ConfigureAwait(false);
+            var imdb = JsonSerializer.Deserialize<ExternalIds>(body, Json)?.ImdbId;
+            imdb = string.IsNullOrWhiteSpace(imdb) ? null : imdb;
+            Remember(cacheKey, imdb);
+            return imdb;
+        }
+        catch (Exception) when (!ct.IsCancellationRequested)
+        {
+            return null;
+        }
     }
 
     private HttpClient Client()
