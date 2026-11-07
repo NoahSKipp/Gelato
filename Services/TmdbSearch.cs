@@ -400,6 +400,35 @@ public sealed class TmdbSearch(IHttpClientFactory http, ILogger<TmdbSearch> log)
         return await FetchImdbIdAsync(kind, tmdbId, key, cacheKey, idBudget.Token, ct).ConfigureAwait(false);
     }
 
+    public async Task<StremioMeta?> FetchTmdbMetaAsync(string kind, int tmdbId, CancellationToken ct = default)
+    {
+        var key = GelatoStremioProvider.GetTmdbApiKey();
+        try
+        {
+            var url = $"{ApiBase}/{kind}/{tmdbId}?append_to_response=external_ids&api_key={key}";
+            var body = await Client().GetStringAsync(url, ct).ConfigureAwait(false);
+            var hit = JsonSerializer.Deserialize<Hit>(body, Json);
+            if (hit == null) return null;
+            var ext = JsonSerializer.Deserialize<AppendExternalIds>(body, Json)?.ExternalIds;
+            var imdb = !string.IsNullOrWhiteSpace(ext?.ImdbId) ? ext.ImdbId : null;
+            var id = imdb ?? $"tmdb:{tmdbId}";
+            var meta = ToMeta(kind, hit, id);
+            meta.ImdbId = imdb;
+            return meta;
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            log.LogDebug(ex, "Failed to fetch TMDB meta for {Kind} {Id}", kind, tmdbId);
+            return null;
+        }
+    }
+
+    private sealed class AppendExternalIds
+    {
+        [JsonPropertyName("external_ids")]
+        public ExternalIds? ExternalIds { get; set; }
+    }
+
     private async Task<string?> FetchImdbIdAsync(
         string kind,
         int tmdbId,

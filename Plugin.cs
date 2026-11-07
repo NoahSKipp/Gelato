@@ -132,7 +132,8 @@ public class GelatoPlugin : BasePlugin<PluginConfiguration>, IHasWebPages
         string? title = null,
         int? year = null,
         string? imdbId = null,
-        string? poster = null
+        string? poster = null,
+        IReadOnlyList<string>? genres = null
     )
     {
         if (Instance == null) return;
@@ -146,6 +147,7 @@ public class GelatoPlugin : BasePlugin<PluginConfiguration>, IHasWebPages
             Name = title,
             Year = year,
             Poster = poster,
+            Genres = genres != null ? new List<string>(genres) : null,
         };
         Instance._manager.SaveStremioMeta(guid, meta);
     }
@@ -154,6 +156,12 @@ public class GelatoPlugin : BasePlugin<PluginConfiguration>, IHasWebPages
     {
         if (_tmdb == null) return null;
         return await _tmdb.GetImdbIdAsync(kind, tmdbId, ct).ConfigureAwait(false);
+    }
+
+    public async Task<StremioMeta?> FetchTmdbMetaAsync(string kind, int tmdbId, CancellationToken ct = default)
+    {
+        if (_tmdb == null) return null;
+        return await _tmdb.FetchTmdbMetaAsync(kind, tmdbId, ct).ConfigureAwait(false);
     }
 
     public static async Task<List<BaseItemDto>> DiscoverAsync(

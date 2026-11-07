@@ -134,13 +134,33 @@ public class InsertActionFilter(
         steps.Mark("meta");
         if (meta is null)
         {
-            log.LogError(
-                "aio meta not found for {Id} {Type}, maybe try aiometadata as meta addon.",
-                stremioMeta.Id,
-                stremioMeta.Type
-            );
-            await next();
-            return;
+            // If Stremio meta was not found (e.g. TMDB-only virtual item or Cinemeta missing it),
+            // fallback to direct TMDB metadata or stremioMeta itself.
+            if (stremioMeta.Id.StartsWith("tmdb:", StringComparison.OrdinalIgnoreCase))
+            {
+                var tmdbStr = stremioMeta.Id["tmdb:".Length..];
+                if (int.TryParse(tmdbStr, out var tmdbInt))
+                {
+                    var kind = isSeries ? "tv" : "movie";
+                    meta = await GelatoPlugin.Instance!.FetchTmdbMetaAsync(kind, tmdbInt, ctx.HttpContext.RequestAborted).ConfigureAwait(false);
+                }
+            }
+
+            if (meta is null && !string.IsNullOrWhiteSpace(stremioMeta.Name))
+            {
+                meta = stremioMeta;
+            }
+
+            if (meta is null)
+            {
+                log.LogError(
+                    "aio meta not found for {Id} {Type}, maybe try aiometadata as meta addon.",
+                    stremioMeta.Id,
+                    stremioMeta.Type
+                );
+                await next();
+                return;
+            }
         }
 
         // Insert the item

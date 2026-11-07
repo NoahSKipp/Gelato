@@ -415,16 +415,28 @@ public sealed class GelatoManager(
             }
 
             var lookupId = meta.ImdbId ?? meta.Id;
-            meta = await cfg.Stremio!.GetMetaAsync(lookupId, mediaType).ConfigureAwait(false);
+            var originalMeta = meta;
+            var fetched = await cfg.Stremio!.GetMetaAsync(lookupId, mediaType).ConfigureAwait(false);
 
-            if (meta is null)
+            if (fetched is null)
             {
-                _log.LogWarning(
-                    "InsertMeta: no aio meta found for {Id} {Type}, maybe try aiometadata as meta addon.",
-                    lookupId,
-                    mediaType
-                );
-                return (null, false);
+                if (originalMeta.IsValid() && !string.IsNullOrWhiteSpace(originalMeta.Name))
+                {
+                    meta = originalMeta;
+                }
+                else
+                {
+                    _log.LogWarning(
+                        "InsertMeta: no aio meta found for {Id} {Type}, maybe try aiometadata as meta addon.",
+                        lookupId,
+                        mediaType
+                    );
+                    return (null, false);
+                }
+            }
+            else
+            {
+                meta = fetched;
             }
 
             mediaType = meta.Type;
