@@ -8,6 +8,14 @@
     "owner": "lstb1t",
     "versions": [
       {
+        "changelog": "Add TMDB fallback for metadata-less Stremio titles and genre support",
+        "checksum": "4221e4b627c94cf9f89d54bf3a7770b9",
+        "sourceUrl": "https://github.com/NoahSKipp/Gelato/releases/download/v0.26.31.0/gelato_0.26.31.0.zip",
+        "targetAbi": "12.0.0.0",
+        "timestamp": "2026-11-07T14:58:35Z",
+        "version": "0.26.31.0"
+      },
+      {
         "changelog": "<!-- Release notes generated using configuration in .github/release.yml at v0.26.30.0 -->\n\n\n\n**Full Changelog**: https://github.com/NoahSKipp/Gelato/compare/v0.26.29.0...v0.26.30.0",
         "checksum": "02d9ce47a6728badec15a2bb2af3d0ab",
         "sourceUrl": "https://github.com/NoahSKipp/Gelato/releases/download/v0.26.30.0/gelato_0.26.30.0.zip",
@@ -238,14 +246,6 @@
         "targetAbi": "10.11.6.0",
         "timestamp": "2026-09-11T09:31:46Z",
         "version": "0.26.18.0"
-      },
-      {
-        "changelog": "## [0.26.17.0] - 2026-09-10\n\n### 🚀 Features\n\n- Add speculative stream prefetch endpoint\n\n### ⚡ Performance\n\n- Warm playback probe on prefetch, split search by type\n\n### 💼 Other\n\n- Speculative stream/probe prefetch and split search\n",
-        "checksum": "1c67d09a62adaa8fbc0486b36a74ebe6",
-        "sourceUrl": "https://github.com/NoahSKipp/Gelato/releases/download/v0.26.17.0/gelato_0.26.17.0.zip",
-        "targetAbi": "10.11.6.0",
-        "timestamp": "2026-09-10T13:18:13Z",
-        "version": "0.26.17.0"
       }
     ]
   }
