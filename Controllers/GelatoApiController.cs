@@ -157,7 +157,7 @@ public sealed class GelatoApiController : ControllerBase
     // prefetch never double-syncs.
     [HttpPost("prefetch/{itemId:guid}")]
     [Authorize]
-    public ActionResult PrefetchStreams([FromRoute, Required] Guid itemId)
+    public ActionResult PrefetchStreams([FromRoute, Required] Guid itemId, [FromQuery] bool probe = false)
     {
         if (!HttpContext.TryGetUserId(out var userId))
         {
@@ -177,23 +177,26 @@ public sealed class GelatoApiController : ControllerBase
 
         // PrimaryVersionId is Guid? as of Jellyfin 12 (was string), matching
         // MediaSourceManagerDecorator.cs's own real cache-key construction.
-        // A repeat prefetch still probes and warms subtitles even when the
-        // stream list is fresh.
-        // The stream list does not queue behind other warm-ups (two at a time,
-        // for nzbdav); only the probe does.
-        RunDetached(async () =>
-        {
-            try
-            {
-                await SyncIfNeededAsync(item, userId, background: false).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                _log.LogDebug(ex, "Stream sync for {ItemId} failed", itemId);
-            }
-            await WarmLoggedAsync(itemId, true, () => WarmItemAsync(item, userId, true, background: false))
-                .ConfigureAwait(false);
-        });
+        // A repeat prefetch still probes and warms subtitles when probe=true
+        // even when the stream list is fresh.
+        RunDetached(() =>
+            WarmLoggedAsync(
+                itemId,
+                probe,
+                async () =>
+                {
+                    try
+                    {
+                        await SyncIfNeededAsync(item, userId, background: true).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        _log.LogDebug(ex, "Stream sync for {ItemId} failed", itemId);
+                    }
+                    await WarmItemAsync(item, userId, probe, background: true).ConfigureAwait(false);
+                }
+            )
+        );
         return Accepted();
     }
 

@@ -586,7 +586,7 @@ public sealed class GelatoManager(
     public async Task SaveInBatchesAsync<T>(IReadOnlyList<T> items, CancellationToken ct)
         where T : BaseItem
     {
-        const int batchSize = 50;
+        const int batchSize = 15;
         for (var start = 0; start < items.Count; start += batchSize)
         {
             var batch = items.Skip(start).Take(batchSize).Cast<BaseItem>().ToList();
@@ -1017,7 +1017,18 @@ public sealed class GelatoManager(
 
         // Then drop orphans, a bounded batch per sync so a title with a large
         // backlog doesn't stall the sync the reader is waiting on.
-        DeleteStreamRows(deleting);
+        if (deleting.Count > 0)
+        {
+            await WriteGate.WaitAsync(ct).ConfigureAwait(false);
+            try
+            {
+                DeleteStreamRows(deleting);
+            }
+            finally
+            {
+                WriteGate.Release();
+            }
+        }
 
         _log.LogDebug(
             "SyncStreams stale rows GelatoId={Id}: existing={Existing} stale={Stale} orphaned={Orphaned}",
