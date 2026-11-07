@@ -8,6 +8,14 @@
     "owner": "lstb1t",
     "versions": [
       {
+        "changelog": "<!-- Release notes generated using configuration in .github/release.yml at v0.26.30.0 -->\n\n\n\n**Full Changelog**: https://github.com/NoahSKipp/Gelato/compare/v0.26.29.0...v0.26.30.0",
+        "checksum": "02d9ce47a6728badec15a2bb2af3d0ab",
+        "sourceUrl": "https://github.com/NoahSKipp/Gelato/releases/download/v0.26.30.0/gelato_0.26.30.0.zip",
+        "targetAbi": "12.0.0.0",
+        "timestamp": "2026-11-07T03:36:20Z",
+        "version": "0.26.30.0"
+      },
+      {
         "changelog": "- Fix prefetch cache eviction in InsertForPrefetchAsync and resolve tmdb: IDs to IMDb IDs on demand\n- Run IMDb ID resolution before FindExistingItem in InsertActionFilter\n- Fall back to tmdb: IDs in TMDB Discover when external_ids is missing or times out, and avoid caching transient lookup errors\n- Respect PersistentMetaTtl on metadata cache reads and fix KeyLock concurrency",
         "checksum": "36e85d9a9d4f97b3ffa968494ee504db",
         "sourceUrl": "https://github.com/NoahSKipp/Gelato/releases/download/v0.26.29.0/gelato_0.26.29.0.zip",
