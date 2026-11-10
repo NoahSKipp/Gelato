@@ -8,6 +8,23 @@ public static class PrefetchBatch
     public const int CallsPerMinute = 20;
     public static readonly TimeSpan Gap = TimeSpan.FromMilliseconds(400);
 
+    private static readonly HashSet<string> ResumeContexts = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "resume",
+        "continue",
+        "continue-watching",
+        "next",
+        "next-up",
+        "nextup",
+    };
+
+    // Continue watching and next episode warm ahead of other rows; anything
+    // else, or nothing given, is an ordinary list.
+    public static WarmPriority PriorityFor(string? context) =>
+        context is not null && ResumeContexts.Contains(context.Trim())
+            ? WarmPriority.Resume
+            : WarmPriority.Browse;
+
     // In the order given, without repeats, five at most. Only the first
     // item is probed when a probe was asked for; titles that are already
     // warm are reported back instead of warmed again.

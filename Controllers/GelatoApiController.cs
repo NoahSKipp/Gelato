@@ -181,8 +181,10 @@ public sealed class GelatoApiController : ControllerBase
         // even when the stream list is fresh.
         RunDetached(() =>
             WarmLoggedAsync(
+                userId,
                 itemId,
                 probe,
+                WarmPriority.Play,
                 async () =>
                 {
                     try
@@ -204,6 +206,10 @@ public sealed class GelatoApiController : ControllerBase
     {
         public List<Guid> ItemIds { get; set; } = [];
         public bool Probe { get; set; }
+
+        // Where the list comes from: "resume" or "next-up" warm ahead of
+        // other rows. Optional.
+        public string? Context { get; set; }
     }
 
     // Syncs the stream list of up to five titles one after another, and
@@ -232,8 +238,9 @@ public sealed class GelatoApiController : ControllerBase
             (id, probe) => IsAlreadyWarm(id, userId, user, probe, now, ttl)
         );
         foreach (var step in steps)
-            BatchQueued[$"{userId:N}:{step.ItemId:N}:{step.Probe}"] = now;
+            BatchQueued[BatchKey(userId, step)] = now;
 
+        var priority = PrefetchBatch.PriorityFor(body.Context);
         RunDetached(async () =>
         {
             for (var i = 0; i < steps.Count; i++)
@@ -241,8 +248,22 @@ public sealed class GelatoApiController : ControllerBase
                 if (i > 0)
                     await Task.Delay(PrefetchBatch.Gap).ConfigureAwait(false);
                 var step = steps[i];
-                await WarmLoggedAsync(step.ItemId, step.Probe, () => WarmBatchItemAsync(step, userId, user))
-                    .ConfigureAwait(false);
+                var outcome = WarmLoggedAsync(
+                    userId,
+                    step.ItemId,
+                    step.Probe,
+                    priority,
+                    () => WarmBatchItemAsync(step, userId, user)
+                );
+                // Dropped, expired or cancelled: a later list may ask again.
+                _ = outcome.ContinueWith(
+                    t =>
+                    {
+                        if (t.Result != WarmOutcome.Ran)
+                            BatchQueued.TryRemove(BatchKey(userId, step), out _);
+                    },
+                    TaskScheduler.Default
+                );
             }
         });
 
@@ -319,7 +340,7 @@ public sealed class GelatoApiController : ControllerBase
 
     private bool IsAlreadyWarm(Guid itemId, Guid userId, User user, bool probe, DateTime now, TimeSpan ttl)
     {
-        if (BatchQueued.TryGetValue($"{userId:N}:{itemId:N}:{probe}", out var queuedAt) && now - queuedAt < ttl)
+        if (BatchQueued.TryGetValue(BatchKey(userId, new PrefetchStep(itemId, probe)), out var queuedAt) && now - queuedAt < ttl)
             return true;
         var item = _libraryManager.GetItemById(itemId);
         if (item is null)
@@ -375,9 +396,19 @@ public sealed class GelatoApiController : ControllerBase
             _gelatoManager.SetStreamSync(cacheKey);
     }
 
+    private static string BatchKey(Guid userId, PrefetchStep step) =>
+        $"{userId:N}:{step.ItemId:N}:{step.Probe}";
+
     // One line per warm-up; no addresses.
-    private Task WarmLoggedAsync(Guid itemId, bool probe, Func<Task> work) =>
-        _gate.RunAsync(async () =>
+    private Task<WarmOutcome> WarmLoggedAsync(
+        Guid userId,
+        Guid itemId,
+        bool probe,
+        WarmPriority priority,
+        Func<Task> work
+    )
+    {
+        async Task Logged()
         {
             var sw = Stopwatch.StartNew();
             var ok = false;
@@ -400,7 +431,10 @@ public sealed class GelatoApiController : ControllerBase
                     probe
                 );
             }
-        });
+        }
+
+        return _gate.RunAsync(userId, itemId, probe, priority, Logged);
+    }
 
     // Work that outlives the request must not carry its HttpContext along:
     // ASP.NET Core reuses that object for the next request, and the source
@@ -516,7 +550,13 @@ public sealed class GelatoApiController : ControllerBase
         }
 
         RunDetached(() =>
-            WarmLoggedAsync(itemId, false, () => InsertForPrefetchAsync(itemId, userId, stremioMeta, user))
+            WarmLoggedAsync(
+                userId,
+                itemId,
+                false,
+                WarmPriority.Play,
+                () => InsertForPrefetchAsync(itemId, userId, stremioMeta, user)
+            )
         );
 
         return Accepted();
