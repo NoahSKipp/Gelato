@@ -202,6 +202,18 @@ public sealed class GelatoApiController : ControllerBase
         return Accepted();
     }
 
+    // Takes back a warm-up of this title the caller queued that has not
+    // started yet. One already running finishes.
+    [HttpDelete("prefetch/{itemId:guid}")]
+    [Authorize]
+    public ActionResult CancelPrefetch([FromRoute, Required] Guid itemId)
+    {
+        if (!HttpContext.TryGetUserId(out var userId))
+            return Unauthorized();
+        var cancelled = _gate.Cancel(userId, itemId);
+        return Ok(new { Cancelled = cancelled });
+    }
+
     public sealed class PrefetchBatchRequest
     {
         public List<Guid> ItemIds { get; set; } = [];
