@@ -282,6 +282,14 @@ public sealed class GelatoApiController : ControllerBase
         return Accepted(new { Queued = steps.Select(s => s.ItemId), AlreadyWarm = alreadyWarm });
     }
 
+    // When clients should warm what, the same for every client.
+    [HttpGet("warm-policy")]
+    [Authorize]
+    public ActionResult<WarmPolicy> GetWarmPolicy()
+    {
+        return Ok(WarmPolicy.From(GelatoPlugin.Instance!.Configuration));
+    }
+
     // { sourceId: warmedAtUtc } for this title's sources that start fast now,
     // under the source ids clients are given.
     [HttpGet("warm/{itemId:guid}")]

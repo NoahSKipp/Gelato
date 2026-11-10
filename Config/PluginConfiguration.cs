@@ -38,6 +38,15 @@ public class PluginConfiguration : BasePluginConfiguration
     public string NzbdavUser { get; set; } = "";
     public string NzbdavPassword { get; set; } = "";
     public string NzbdavContentPath { get; set; } = "/content";
+
+    // Warm-up timing every client reads from /gelato/warm-policy.
+    public int WarmHoverDwellMs { get; set; } = 600;
+    public int WarmPlayFocusDwellMs { get; set; } = 1000;
+    public int WarmSearchSettleMs { get; set; } = 600;
+    public int WarmSearchFocusDwellMs { get; set; } = 400;
+    public int WarmHomeCount { get; set; } = 6;
+    public int WarmSecondSourceDelayMs { get; set; } = 1500;
+    public double WarmNextEpisodeAtFraction { get; set; } = 0.0;
     public List<CatalogConfig> Catalogs { get; set; } = [];
     public List<UserConfig> UserConfigs { get; set; } = [];
 
