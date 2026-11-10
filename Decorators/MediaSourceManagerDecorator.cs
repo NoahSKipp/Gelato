@@ -451,6 +451,8 @@ public sealed class MediaSourceManagerDecorator(
 
         try
         {
+            if (await _manager.Value.TryShareStreamSync(item, userId, background).ConfigureAwait(false))
+                return;
             var count = await _manager
                 .Value.SyncStreams(item, userId, ct, background)
                 .ConfigureAwait(false);

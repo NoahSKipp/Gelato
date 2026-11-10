@@ -58,6 +58,11 @@ public sealed class GelatoManager(
     }
 
     private readonly ConcurrentDictionary<string, SyncFlight> _syncsInFlight = new();
+
+    // Who fetched each title's streams from the addon lately, and with
+    // which setup, by title id. In memory only: after a restart every user
+    // fetches again.
+    private readonly ConcurrentDictionary<Guid, ConcurrentDictionary<Guid, StreamFetch>> _fetches = new();
     public const string TreeSyncedTag = "gelato-tree-synced";
 
     /// <summary>
@@ -99,13 +104,18 @@ public sealed class GelatoManager(
     private static TimeSpan StreamTtl =>
         TimeSpan.FromSeconds(GelatoPlugin.Instance!.Configuration.StreamTTL);
 
-    public void SetStreamSync(string guid)
+    public void SetStreamSync(string guid) => SetStreamSync(guid, DateTime.UtcNow);
+
+    private void SetStreamSync(string guid, DateTime at)
     {
         var now = DateTime.UtcNow;
         var ttl = StreamTtl;
-        _streamSyncs.RemoveWhere((_, at) => now - at > ttl);
-        _streamSyncs.Set(guid, now);
+        _streamSyncs.RemoveWhere((_, t) => now - t > ttl);
+        _streamSyncs.Set(guid, at);
     }
+
+    public static string StreamSyncKey(Guid userId, BaseItem item) =>
+        $"{userId}:{(item as Video)?.PrimaryVersionId ?? item.Id}";
 
     public void ClearStreamSync(string guid) => _streamSyncs.Remove(guid);
 
@@ -185,6 +195,7 @@ public sealed class GelatoManager(
         // titles with no stream rows left as synced, and Play found nothing
         // to play until they expired.
         _streamSyncs.RemoveWhere((_, _) => true);
+        _fetches.Clear();
 
         _log.LogDebug("Cache cleared");
     }
@@ -695,19 +706,156 @@ public sealed class GelatoManager(
         return flight.Run.Value;
     }
 
+    private void RecordFetch(Guid itemId, Guid userId)
+    {
+        if (StreamSyncShare.SetupOf(GelatoPlugin.Instance!.GetConfig(userId)) is not { } setup)
+            return;
+        var now = DateTime.UtcNow;
+        var ttl = StreamTtl;
+        if (_fetches.Count > 5000)
+        {
+            foreach (var (id, users) in _fetches)
+            {
+                if (users.Values.All(f => now - f.At >= ttl))
+                    _fetches.TryRemove(id, out _);
+            }
+        }
+        var byUser = _fetches.GetOrAdd(itemId, _ => new ConcurrentDictionary<Guid, StreamFetch>());
+        byUser[userId] = new StreamFetch(userId, setup, now);
+    }
+
+    // Another user with the same setup fetched this title's streams within
+    // the TTL: this user joins those rows instead of asking the addon again,
+    // and its mark runs out when that fetch's does. False whenever that is
+    // not certain; the caller then syncs as before.
+    public async Task<bool> TryShareStreamSync(BaseItem item, Guid userId, bool background)
+    {
+        if (item is not Video video || video.IsStream() || userId == Guid.Empty)
+            return false;
+        if (!_fetches.TryGetValue(item.Id, out var byUser) || byUser.IsEmpty)
+            return false;
+        if (_syncsInFlight.ContainsKey($"{userId:N}:{item.Id:N}"))
+            return false;
+        var setup = StreamSyncShare.SetupOf(GelatoPlugin.Instance!.GetConfig(userId));
+        var source = StreamSyncShare.PickSource(
+            userId,
+            setup,
+            byUser.Values,
+            DateTime.UtcNow,
+            StreamTtl,
+            u => HasStreamSync(StreamSyncKey(u, item)) && !_syncsInFlight.ContainsKey($"{u:N}:{item.Id:N}")
+        );
+        if (source is not { } from || StremioUri.FromBaseItem(video) is not { } uri)
+            return false;
+
+        var sw = Stopwatch.StartNew();
+        List<Video>? join;
+        await SyncDbSlots.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+        using (new SlotRelease(SyncDbSlots))
+        {
+            join = StreamSyncShare.RowsToJoin(
+                LoadSyncRows(video, uri),
+                r => r.GelatoData<List<Guid>>("userIds") ?? [],
+                from.UserId,
+                userId
+            );
+        }
+        if (join is null)
+            return false;
+
+        var changed = new List<Video>();
+        foreach (var row in join)
+        {
+            var users = row.GelatoData<List<Guid>>("userIds") ?? [];
+            if (users.Contains(userId))
+                continue;
+            users.Add(userId);
+            row.SetGelatoData("userIds", users);
+            changed.Add(row);
+        }
+
+        using (
+            background
+                ? await writeGate.EnterAsync("ShareStreams", CancellationToken.None, heavy: false).ConfigureAwait(false)
+                : null
+        )
+        {
+            await SaveInBatchesAsync(changed, CancellationToken.None).ConfigureAwait(false);
+        }
+        SetStreamSync(StreamSyncKey(userId, item), from.At);
+        _log.LogInformation(
+            "SyncStreams shared itemId={ItemId} userId={UserId} age={AgeS}s rows={Rows} written={Written} duration={Ms}ms",
+            item.Id,
+            userId,
+            Math.Round((DateTime.UtcNow - from.At).TotalSeconds),
+            join.Count,
+            changed.Count,
+            sw.ElapsedMilliseconds
+        );
+        return true;
+    }
+
     private async Task<int> RunSyncStreams(string key, BaseItem item, Guid userId, Task? promoted)
     {
         try
         {
             // Not the first caller's token: one aborted request must not
             // leave a half-written stream list for the others.
-            return await SyncStreamsCore(item, userId, CancellationToken.None, promoted)
+            var count = await SyncStreamsCore(item, userId, CancellationToken.None, promoted)
                 .ConfigureAwait(false);
+            if (count > 0)
+                RecordFetch(item.Id, userId);
+            return count;
         }
         finally
         {
             _syncsInFlight.TryRemove(key, out _);
         }
+    }
+
+    // Every stored stream row of this title, whichever users it belongs to.
+    private List<Video> LoadSyncRows(Video video, StremioUri uri)
+    {
+        var query =
+            video is Episode episodeVideo
+                ? new InternalItemsQuery
+                {
+                    IncludeItemTypes = [BaseItemKind.Episode],
+                    ParentId = episodeVideo.SeasonId,
+                    Recursive = false,
+                    GroupByPresentationUniqueKey = false,
+                    GroupBySeriesPresentationUniqueKey = false,
+                    CollapseBoxSetItems = false,
+                    IsDeadPerson = true,
+                    Tags = [StreamTag],
+                    IndexNumber = episodeVideo.IndexNumber,
+                }
+                : new InternalItemsQuery
+                {
+                    IncludeItemTypes = [BaseItemKind.Movie],
+                    HasAnyProviderId = new Dictionary<string, string>
+                    {
+                        { "Stremio", uri.ExternalId },
+                    },
+                    Recursive = false,
+                    GroupByPresentationUniqueKey = false,
+                    GroupBySeriesPresentationUniqueKey = false,
+                    CollapseBoxSetItems = false,
+                    IsDeadPerson = true,
+                    Tags = [StreamTag],
+                };
+
+        return repo.GetItemList(query)
+            .OfType<Video>()
+            .Where(v =>
+                v.Id != video.Id
+                && string.Equals(
+                    v.GetProviderId("Stremio"),
+                    uri.ExternalId,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
+            .ToList();
     }
 
     private async Task<int> SyncStreamsCore(
@@ -804,46 +952,7 @@ public sealed class GelatoManager(
         // the existing stream rows, so stale rows never lost this user and
         // every sync piled another full set on top (300+ per episode, most
         // of them dead links).
-        var query =
-            video is Episode episodeVideo
-                ? new InternalItemsQuery
-                {
-                    IncludeItemTypes = [BaseItemKind.Episode],
-                    ParentId = episodeVideo.SeasonId,
-                    Recursive = false,
-                    GroupByPresentationUniqueKey = false,
-                    GroupBySeriesPresentationUniqueKey = false,
-                    CollapseBoxSetItems = false,
-                    IsDeadPerson = true,
-                    Tags = [StreamTag],
-                    IndexNumber = episodeVideo.IndexNumber,
-                }
-                : new InternalItemsQuery
-                {
-                    IncludeItemTypes = [BaseItemKind.Movie],
-                    HasAnyProviderId = new Dictionary<string, string>
-                    {
-                        { "Stremio", uri.ExternalId },
-                    },
-                    Recursive = false,
-                    GroupByPresentationUniqueKey = false,
-                    GroupBySeriesPresentationUniqueKey = false,
-                    CollapseBoxSetItems = false,
-                    IsDeadPerson = true,
-                    Tags = [StreamTag],
-                };
-
-        var existingStreamItems = repo.GetItemList(query)
-            .OfType<Video>()
-            .Where(v =>
-                v.Id != video.Id
-                && string.Equals(
-                    v.GetProviderId("Stremio"),
-                    uri.ExternalId,
-                    StringComparison.OrdinalIgnoreCase
-                )
-            )
-            .ToList();
+        var existingStreamItems = LoadSyncRows(video, uri);
 
         // Match stream rows by persisted Gelato guid, not by volatile playback URL/path.
         var existingByGuid = new Dictionary<Guid, Video>();

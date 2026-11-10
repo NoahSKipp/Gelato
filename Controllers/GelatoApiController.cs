@@ -401,6 +401,8 @@ public sealed class GelatoApiController : ControllerBase
         var cacheKey = $"{userId}:{(item as Video)?.PrimaryVersionId ?? item.Id}";
         if (_gelatoManager.HasStreamSync(cacheKey))
             return;
+        if (await _gelatoManager.TryShareStreamSync(item, userId, background).ConfigureAwait(false))
+            return;
         var count = await _gelatoManager
             .SyncStreams(item, userId, CancellationToken.None, background)
             .ConfigureAwait(false);
