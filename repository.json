@@ -8,6 +8,14 @@
     "owner": "lstb1t",
     "versions": [
       {
+        "changelog": "## [0.26.32.0] - 2026-11-10\n\n### 🚀 Features\n\n- *(warm)* Let a client take back a queued warm-up\n- *(warm)* Serve one warm-up policy to every client\n\n### ⚡ Performance\n\n- *(warm)* Run warm-ups by priority and keep a slot for the title page\n- *(streams)* Let a second user join a fresh stream list instead of fetching it again\n",
+        "checksum": "7071959140ccdaf9599dbf33f54e9b4f",
+        "sourceUrl": "https://github.com/NoahSKipp/Gelato/releases/download/v0.26.32.0/gelato_0.26.32.0.zip",
+        "targetAbi": "12.0.0.0",
+        "timestamp": "2026-11-10T21:10:24Z",
+        "version": "0.26.32.0"
+      },
+      {
         "changelog": "Add TMDB fallback for metadata-less Stremio titles and genre support",
         "checksum": "4221e4b627c94cf9f89d54bf3a7770b9",
         "sourceUrl": "https://github.com/NoahSKipp/Gelato/releases/download/v0.26.31.0/gelato_0.26.31.0.zip",
@@ -238,14 +246,6 @@
         "targetAbi": "12.0.0.0",
         "timestamp": "2026-09-11T11:05:33Z",
         "version": "0.26.19.0"
-      },
-      {
-        "changelog": "## [0.26.18.0] - 2026-09-11\n\n### 🚀 Features\n\n- Prefetch not-yet-inserted search results too\n\n### 🐛 Bug Fixes\n\n- Protect the library during the Jellyfin 12 upgrade (#204)\n\n### ⚙️ Miscellaneous Tasks\n\n- Also fire Publish Plugin on release:published, not just released\n- *(release)* Bump version to v0.26.16.1\n\n### 💼 Other\n\n- Upstream Jellyfin 12 upgrade protection (lostb1t/gelato#204)\n",
-        "checksum": "1a1960b7e2bbf36665e50c0355905b2b",
-        "sourceUrl": "https://github.com/NoahSKipp/Gelato/releases/download/v0.26.18.0/gelato_0.26.18.0.zip",
-        "targetAbi": "10.11.6.0",
-        "timestamp": "2026-09-11T09:31:46Z",
-        "version": "0.26.18.0"
       }
     ]
   }
