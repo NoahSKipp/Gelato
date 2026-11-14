@@ -108,4 +108,22 @@ public class StreamSyncShareTests
         Assert.Null(StreamSyncShare.RowsToJoin(rows, r => r, A, B));
         Assert.Null(StreamSyncShare.RowsToJoin(new List<Guid[]>(), r => r, A, B));
     }
+
+    [Fact]
+    public void JoinsRowsWhenUserAlreadyOnSomeRows()
+    {
+        var rows = new List<Guid[]> { new[] { A, B }, new[] { A } };
+        var join = StreamSyncShare.RowsToJoin(rows, r => r, A, B);
+        Assert.NotNull(join);
+        Assert.Equal(2, join.Count);
+    }
+
+    [Fact]
+    public void JoinsRowsWhenTargetUserIsOnAllSourceRows()
+    {
+        var rows = new List<Guid[]> { new[] { A, B }, new[] { A, B } };
+        var join = StreamSyncShare.RowsToJoin(rows, r => r, A, B);
+        Assert.NotNull(join);
+        Assert.Equal(2, join.Count);
+    }
 }

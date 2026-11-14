@@ -514,16 +514,54 @@ public sealed class MediaSourceManagerDecorator(
             };
         }
 
-        var list = repo.GetItemList(query)
+        var allStreams = repo.GetItemList(query)
             .OfType<Video>()
             .Where(x => x.IsGelato())
             .Select(x => (Item: x, Data: x.ReadGelatoData()))
+            .OrderBy(x => Read<int?>(x.Data, "index") ?? int.MaxValue)
+            .ToList();
+
+        var list = allStreams
             .Where(x =>
                 userId == Guid.Empty
                 || (Read<List<Guid>>(x.Data, "userIds")?.Contains(userId) ?? false)
             )
-            .OrderBy(x => Read<int?>(x.Data, "index") ?? int.MaxValue)
             .ToList();
+
+        if (list.Count == 0 && userId != Guid.Empty && allStreams.Count > 0)
+        {
+            var userSetup = StreamSyncShare.SetupOf(GelatoPlugin.Instance?.GetConfig(userId));
+            if (userSetup is not null)
+            {
+                var canShare = allStreams.Any(x =>
+                {
+                    var userIds = Read<List<Guid>>(x.Data, "userIds");
+                    return userIds == null
+                        || userIds.Count == 0
+                        || userIds.Any(u =>
+                            StreamSyncShare.SetupOf(GelatoPlugin.Instance?.GetConfig(u)) == userSetup
+                        );
+                });
+
+                if (canShare)
+                {
+                    list = allStreams;
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await _manager
+                                .Value.TryShareStreamSync(item, userId, background: true)
+                                .ConfigureAwait(false);
+                        }
+                        catch (Exception ex)
+                        {
+                            _log.LogDebug(ex, "Background share sync failed for {Id}", item.Id);
+                        }
+                    });
+                }
+            }
+        }
 
         _log.LogTrace("Found {Count} streams for {Id} user {UserId}", list.Count, item.Id, userId);
         return list;

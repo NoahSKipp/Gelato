@@ -732,35 +732,70 @@ public sealed class GelatoManager(
     {
         if (item is not Video video || video.IsStream() || userId == Guid.Empty)
             return false;
-        if (!_fetches.TryGetValue(item.Id, out var byUser) || byUser.IsEmpty)
-            return false;
         if (_syncsInFlight.ContainsKey($"{userId:N}:{item.Id:N}"))
             return false;
-        var setup = StreamSyncShare.SetupOf(GelatoPlugin.Instance!.GetConfig(userId));
-        var source = StreamSyncShare.PickSource(
-            userId,
-            setup,
-            byUser.Values,
-            DateTime.UtcNow,
-            StreamTtl,
-            u => HasStreamSync(StreamSyncKey(u, item)) && !_syncsInFlight.ContainsKey($"{u:N}:{item.Id:N}")
-        );
-        if (source is not { } from || StremioUri.FromBaseItem(video) is not { } uri)
+        var setup = StreamSyncShare.SetupOf(GelatoPlugin.Instance?.GetConfig(userId));
+        if (setup is null || StremioUri.FromBaseItem(video) is not { } uri)
             return false;
+
+        Guid? sourceUserId = null;
+        DateTime fetchAt = DateTime.UtcNow;
+
+        if (_fetches.TryGetValue(item.Id, out var byUser) && !byUser.IsEmpty)
+        {
+            var source = StreamSyncShare.PickSource(
+                userId,
+                setup,
+                byUser.Values,
+                DateTime.UtcNow,
+                StreamTtl,
+                u => HasStreamSync(StreamSyncKey(u, item)) && !_syncsInFlight.ContainsKey($"{u:N}:{item.Id:N}")
+            );
+            if (source is { } from)
+            {
+                sourceUserId = from.UserId;
+                fetchAt = from.At;
+            }
+        }
 
         var sw = Stopwatch.StartNew();
         List<Video>? join;
         await SyncDbSlots.WaitAsync(CancellationToken.None).ConfigureAwait(false);
         using (new SlotRelease(SyncDbSlots))
         {
+            var existingRows = LoadSyncRows(video, uri);
+            if (existingRows.Count == 0)
+                return false;
+
+            if (sourceUserId is null)
+            {
+                // Fallback: check users on the persisted rows when memory cache was cleared (e.g. server restart)
+                foreach (var row in existingRows)
+                {
+                    var uids = row.GelatoData<List<Guid>>("userIds") ?? [];
+                    var match = uids.FirstOrDefault(u =>
+                        u != userId
+                        && StreamSyncShare.SetupOf(GelatoPlugin.Instance?.GetConfig(u)) == setup
+                    );
+                    if (match != Guid.Empty)
+                    {
+                        sourceUserId = match;
+                        break;
+                    }
+                }
+            }
+
+            if (sourceUserId is null)
+                return false;
+
             join = StreamSyncShare.RowsToJoin(
-                LoadSyncRows(video, uri),
+                existingRows,
                 r => r.GelatoData<List<Guid>>("userIds") ?? [],
-                from.UserId,
+                sourceUserId.Value,
                 userId
             );
         }
-        if (join is null)
+        if (join is null || join.Count == 0)
             return false;
 
         var changed = new List<Video>();
@@ -774,20 +809,24 @@ public sealed class GelatoManager(
             changed.Add(row);
         }
 
-        using (
-            background
-                ? await writeGate.EnterAsync("ShareStreams", CancellationToken.None, heavy: false).ConfigureAwait(false)
-                : null
-        )
+        if (changed.Count > 0)
         {
-            await SaveInBatchesAsync(changed, CancellationToken.None).ConfigureAwait(false);
+            using (
+                background
+                    ? await writeGate.EnterAsync("ShareStreams", CancellationToken.None, heavy: false).ConfigureAwait(false)
+                    : null
+            )
+            {
+                await SaveInBatchesAsync(changed, CancellationToken.None).ConfigureAwait(false);
+            }
         }
-        SetStreamSync(StreamSyncKey(userId, item), from.At);
+        SetStreamSync(StreamSyncKey(userId, item), fetchAt);
+        RecordFetch(item.Id, userId);
         _log.LogInformation(
             "SyncStreams shared itemId={ItemId} userId={UserId} age={AgeS}s rows={Rows} written={Written} duration={Ms}ms",
             item.Id,
             userId,
-            Math.Round((DateTime.UtcNow - from.At).TotalSeconds),
+            Math.Round((DateTime.UtcNow - fetchAt).TotalSeconds),
             join.Count,
             changed.Count,
             sw.ElapsedMilliseconds
