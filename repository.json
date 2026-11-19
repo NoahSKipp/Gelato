@@ -8,6 +8,14 @@
     "owner": "lstb1t",
     "versions": [
       {
+        "changelog": "## [0.26.32.1] - 2026-11-19\n\n### 🐛 Bug Fixes\n\n- *(artwork)* Exclude stream rows from artwork/metadata pipelines and add stream artwork cleanup tasks\n\n### ⚡ Performance\n\n- *(streams)* Share existing stream rows across users with matching setup and persist joins across restarts\n",
+        "checksum": "a891547f8c68fea1d34aee1ef2dd7f76",
+        "sourceUrl": "https://github.com/NoahSKipp/Gelato/releases/download/v0.26.32.1/gelato_0.26.32.1.zip",
+        "targetAbi": "12.0.0.0",
+        "timestamp": "2026-11-19T00:15:25Z",
+        "version": "0.26.32.1"
+      },
+      {
         "changelog": "## [0.26.32.0] - 2026-11-10\n\n### 🚀 Features\n\n- *(warm)* Let a client take back a queued warm-up\n- *(warm)* Serve one warm-up policy to every client\n\n### ⚡ Performance\n\n- *(warm)* Run warm-ups by priority and keep a slot for the title page\n- *(streams)* Let a second user join a fresh stream list instead of fetching it again\n",
         "checksum": "7071959140ccdaf9599dbf33f54e9b4f",
         "sourceUrl": "https://github.com/NoahSKipp/Gelato/releases/download/v0.26.32.0/gelato_0.26.32.0.zip",
@@ -238,14 +246,6 @@
         "targetAbi": "12.0.0.0",
         "timestamp": "2026-09-11T22:39:54Z",
         "version": "0.26.19.1"
-      },
-      {
-        "changelog": "## [0.26.19.0] - 2026-09-11\n\n### 🚀 Features\n\n- Add Jellyfin 12 support\n\n### 🐛 Bug Fixes\n\n- Adapt PrimaryVersionId cache-key parsing for Jellyfin 12\n\n### ⚙️ Miscellaneous Tasks\n\n- Overwrite duplicate release assets on the second publish run\n\n### 💼 Other\n\n- Jellyfin 12 support (server upgraded)\n",
-        "checksum": "c4a1a29953e975316bc9a5bdfc30a200",
-        "sourceUrl": "https://github.com/NoahSKipp/Gelato/releases/download/v0.26.19.0/gelato_0.26.19.0.zip",
-        "targetAbi": "12.0.0.0",
-        "timestamp": "2026-09-11T11:05:33Z",
-        "version": "0.26.19.0"
       }
     ]
   }
