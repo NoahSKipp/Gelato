@@ -35,6 +35,7 @@ public sealed class ArtworkBackfillService(
     public static bool NeedsArt(BaseItem item) =>
         item is Movie or Series
         && item.IsGelato()
+        && !item.IsStream()
         && !item.IsLocked
         && !item.HasImage(ImageType.Backdrop)
         && !TriedRecently(item);
@@ -53,6 +54,12 @@ public sealed class ArtworkBackfillService(
                 new InternalItemsQuery
                 {
                     IncludeItemTypes = [BaseItemKind.Movie, BaseItemKind.Series],
+                    HasAnyProviderId = new Dictionary<string, string>
+                    {
+                        { "Stremio", string.Empty },
+                        { "stremio", string.Empty },
+                    },
+                    ExcludeTags = [GelatoManager.StreamTag],
                     Recursive = true,
                 }
             )

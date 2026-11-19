@@ -13,6 +13,7 @@ namespace Gelato.Decorators;
 public sealed class ProviderManagerDecorator(
     IProviderManager inner,
     IApplicationPaths appPaths,
+    Lazy<ILibraryManager> libraryManager,
     ILogger<ProviderManagerDecorator> log
 ) : IProviderManager
 {
@@ -30,6 +31,9 @@ public sealed class ProviderManagerDecorator(
         CancellationToken cancellationToken
     )
     {
+        if (item.IsStream())
+            return Task.CompletedTask;
+
         if (url.IsUrl())
         {
             log.LogDebug(
@@ -42,7 +46,7 @@ public sealed class ProviderManagerDecorator(
             );
 
             // Always persist the URL at the gelato fake path so it can be resolved on demand
-            // regardless of LazyImages mode — this is the permanent source-of-truth for the URL.
+            // regardless of LazyImages mode - this is the permanent source-of-truth for the URL.
             var info = BuildImageInfo(appPaths, item.Id, type, imageIndex);
             WriteSidecar(info.Path + ".url", url);
 
@@ -72,7 +76,10 @@ public sealed class ProviderManagerDecorator(
         ImageType type,
         int? imageIndex,
         CancellationToken cancellationToken
-    ) => inner.SaveImage(item, url, type, imageIndex, cancellationToken);
+    ) =>
+        item.IsStream()
+            ? Task.CompletedTask
+            : inner.SaveImage(item, url, type, imageIndex, cancellationToken);
 
     public static void SetRemoteImage(
         IApplicationPaths appPaths,
@@ -82,6 +89,9 @@ public sealed class ProviderManagerDecorator(
         string url
     )
     {
+        if (item.IsStream())
+            return;
+
         var info = BuildImageInfo(appPaths, item.Id, type, imageIndex);
         // Store the remote URL in a sidecar file next to the placeholder.
         // ImageResourceFilter reads this file to proxy the image.
@@ -133,7 +143,7 @@ public sealed class ProviderManagerDecorator(
         };
     }
 
-    // — pass-through for everything else —
+    // -- pass-through for everything else --
 
     public event EventHandler<GenericEventArgs<BaseItem>> RefreshStarted
     {
@@ -160,7 +170,10 @@ public sealed class ProviderManagerDecorator(
         ImageType type,
         int? imageIndex,
         CancellationToken cancellationToken
-    ) => inner.SaveImage(item, source, mimeType, type, imageIndex, cancellationToken);
+    ) =>
+        item.IsStream()
+            ? Task.CompletedTask
+            : inner.SaveImage(item, source, mimeType, type, imageIndex, cancellationToken);
 
     public Task SaveImage(
         BaseItem item,
@@ -170,19 +183,47 @@ public sealed class ProviderManagerDecorator(
         int? imageIndex,
         bool? saveLocallyWithMedia,
         CancellationToken cancellationToken
-    ) => inner.SaveImage(item, source, mimeType, type, imageIndex, saveLocallyWithMedia, cancellationToken);
+    ) =>
+        item.IsStream()
+            ? Task.CompletedTask
+            : inner.SaveImage(
+                item,
+                source,
+                mimeType,
+                type,
+                imageIndex,
+                saveLocallyWithMedia,
+                cancellationToken
+            );
 
     public Task SaveImage(Stream source, string mimeType, string path) =>
         inner.SaveImage(source, mimeType, path);
 
-    public void QueueRefresh(Guid itemId, MetadataRefreshOptions options, RefreshPriority priority) =>
+    public void QueueRefresh(Guid itemId, MetadataRefreshOptions options, RefreshPriority priority)
+    {
+        if (libraryManager.Value.GetItemById(itemId) is { } item && item.IsStream())
+            return;
+
         inner.QueueRefresh(itemId, options, priority);
+    }
 
-    public Task RefreshFullItem(BaseItem item, MetadataRefreshOptions options, CancellationToken cancellationToken) =>
-        inner.RefreshFullItem(item, options, cancellationToken);
+    public Task RefreshFullItem(
+        BaseItem item,
+        MetadataRefreshOptions options,
+        CancellationToken cancellationToken
+    ) =>
+        item.IsStream()
+            ? Task.CompletedTask
+            : inner.RefreshFullItem(item, options, cancellationToken);
 
-    public Task<ItemUpdateType> RefreshSingleItem(BaseItem item, MetadataRefreshOptions options, CancellationToken cancellationToken) =>
-        inner.RefreshSingleItem(item, options, cancellationToken);
+    public Task<ItemUpdateType> RefreshSingleItem(
+        BaseItem item,
+        MetadataRefreshOptions options,
+        CancellationToken cancellationToken
+    ) =>
+        item.IsStream()
+            ? Task.FromResult(ItemUpdateType.None)
+            : inner.RefreshSingleItem(item, options, cancellationToken);
 
     public void AddParts(
         IEnumerable<IImageProvider> imageProviders,
@@ -193,23 +234,42 @@ public sealed class ProviderManagerDecorator(
         IEnumerable<IExternalUrlProvider> externalUrlProviders
     ) => inner.AddParts(imageProviders, metadataServices, metadataProviders, metadataSavers, externalIds, externalUrlProviders);
 
-    public Task<IEnumerable<RemoteImageInfo>> GetAvailableRemoteImages(BaseItem item, RemoteImageQuery query, CancellationToken cancellationToken) =>
-        inner.GetAvailableRemoteImages(item, query, cancellationToken);
+    public Task<IEnumerable<RemoteImageInfo>> GetAvailableRemoteImages(
+        BaseItem item,
+        RemoteImageQuery query,
+        CancellationToken cancellationToken
+    ) =>
+        item.IsStream()
+            ? Task.FromResult(Enumerable.Empty<RemoteImageInfo>())
+            : inner.GetAvailableRemoteImages(item, query, cancellationToken);
 
     public IEnumerable<ImageProviderInfo> GetRemoteImageProviderInfo(BaseItem item) =>
-        inner.GetRemoteImageProviderInfo(item);
+        item.IsStream() ? [] : inner.GetRemoteImageProviderInfo(item);
 
-    public IEnumerable<IImageProvider> GetImageProviders(BaseItem item, ImageRefreshOptions refreshOptions) =>
-        inner.GetImageProviders(item, refreshOptions);
+    public IEnumerable<IImageProvider> GetImageProviders(
+        BaseItem item,
+        ImageRefreshOptions refreshOptions
+    ) => item.IsStream() ? [] : inner.GetImageProviders(item, refreshOptions);
 
-    public IEnumerable<IMetadataProvider<T>> GetMetadataProviders<T>(BaseItem item, LibraryOptions libraryOptions)
-        where T : BaseItem => inner.GetMetadataProviders<T>(item, libraryOptions);
+    public IEnumerable<IMetadataProvider<T>> GetMetadataProviders<T>(
+        BaseItem item,
+        LibraryOptions libraryOptions
+    )
+        where T : BaseItem =>
+        item.IsStream() ? [] : inner.GetMetadataProviders<T>(item, libraryOptions);
 
-    public IEnumerable<IMetadataProvider<T>> GetMetadataProviders<T>(BaseItem item, LibraryOptions libraryOptions, bool includeDisabled)
-        where T : BaseItem => inner.GetMetadataProviders<T>(item, libraryOptions, includeDisabled);
+    public IEnumerable<IMetadataProvider<T>> GetMetadataProviders<T>(
+        BaseItem item,
+        LibraryOptions libraryOptions,
+        bool includeDisabled
+    )
+        where T : BaseItem =>
+        item.IsStream() ? [] : inner.GetMetadataProviders<T>(item, libraryOptions, includeDisabled);
 
-    public IEnumerable<IMetadataSaver> GetMetadataSavers(BaseItem item, LibraryOptions libraryOptions) =>
-        inner.GetMetadataSavers(item, libraryOptions);
+    public IEnumerable<IMetadataSaver> GetMetadataSavers(
+        BaseItem item,
+        LibraryOptions libraryOptions
+    ) => item.IsStream() ? [] : inner.GetMetadataSavers(item, libraryOptions);
 
     public MetadataPluginSummary[] GetAllMetadataPlugins() => inner.GetAllMetadataPlugins();
 
@@ -219,10 +279,14 @@ public sealed class ProviderManagerDecorator(
         inner.GetExternalIdInfos(item);
 
     public Task SaveMetadataAsync(BaseItem item, ItemUpdateType updateType) =>
-        inner.SaveMetadataAsync(item, updateType);
+        item.IsStream() ? Task.CompletedTask : inner.SaveMetadataAsync(item, updateType);
 
-    public Task SaveMetadataAsync(BaseItem item, ItemUpdateType updateType, IEnumerable<string> savers) =>
-        inner.SaveMetadataAsync(item, updateType, savers);
+    public Task SaveMetadataAsync(
+        BaseItem item,
+        ItemUpdateType updateType,
+        IEnumerable<string> savers
+    ) =>
+        item.IsStream() ? Task.CompletedTask : inner.SaveMetadataAsync(item, updateType, savers);
 
     public MetadataOptions GetMetadataOptions(BaseItem item) => inner.GetMetadataOptions(item);
 

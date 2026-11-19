@@ -561,6 +561,7 @@ public sealed class GelatoManager(
             IncludeItemTypes = [kind],
             Recursive = true,
             ParentId = parent.Id,
+            ExcludeTags = [StreamTag],
             HasAnyProviderId = providerIds
                 .Where(kvp =>
                     kvp.Key is nameof(MetadataProvider.Tmdb) or nameof(MetadataProvider.Tvdb)
@@ -578,7 +579,8 @@ public sealed class GelatoManager(
 
         foreach (var item in libraryManager.GetItemList(q))
         {
-            yield return item;
+            if (!item.IsStream())
+                yield return item;
         }
     }
 
@@ -1615,10 +1617,11 @@ public sealed class GelatoManager(
                         BaseItemKind.Series,
                         BaseItemKind.Season,
                         BaseItemKind.Episode,
-                    ]
+                    ],
+                    ExcludeTags = [StreamTag],
                 }
             )
-            .Where(m => m.EndDate is null || m.EndDate >= sentinel || m.EndDate > now)
+            .Where(m => !m.IsStream() && (m.EndDate is null || m.EndDate >= sentinel || m.EndDate > now))
             .ToList();
 
         var total = needsEndDate.Count;
@@ -2211,11 +2214,13 @@ public sealed class GelatoManager(
                 new InternalItemsQuery
                 {
                     IncludeItemTypes = [BaseItemKind.Movie, BaseItemKind.Series],
+                    ExcludeTags = [StreamTag],
                     Recursive = true,
                 }
             )
             .Where(item =>
-                !(item.Tags?.Contains(AnimeTag, StringComparer.OrdinalIgnoreCase) ?? false)
+                !item.IsStream()
+                && !(item.Tags?.Contains(AnimeTag, StringComparer.OrdinalIgnoreCase) ?? false)
                 && IsAnime(item)
             )
             .ToList();

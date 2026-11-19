@@ -15,7 +15,7 @@ public sealed class GelatoImageProvider(ILogger<GelatoImageProvider> log)
     public string Name => "Gelato";
     public int Order => 0;
 
-    public bool Supports(BaseItem item) => item is Movie or Series;
+    public bool Supports(BaseItem item) => item is Movie or Series && !item.IsStream();
 
     public IEnumerable<ImageType> GetSupportedImages(BaseItem item) =>
         [ImageType.Primary, ImageType.Backdrop, ImageType.Logo, ImageType.Thumb];

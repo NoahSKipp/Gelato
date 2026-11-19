@@ -83,7 +83,7 @@ public class IntroDbSegmentProvider : IMediaSegmentProvider
         );
 
         var item = _libraryManager.GetItemById(request.ItemId);
-        if (item is not Episode episode)
+        if (item is not Episode episode || episode.IsStream())
         {
             return Array.Empty<MediaSegmentDto>();
         }
@@ -176,7 +176,8 @@ public class IntroDbSegmentProvider : IMediaSegmentProvider
     }
 
     /// <inheritdoc />
-    public ValueTask<bool> Supports(BaseItem item) => ValueTask.FromResult(item is Episode);
+    public ValueTask<bool> Supports(BaseItem item) =>
+        ValueTask.FromResult(item is Episode && !item.IsStream());
 
     /// <inheritdoc />
     /// <remarks>
