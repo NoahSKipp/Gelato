@@ -76,27 +76,31 @@ public sealed class MediaSourceManagerDecorator(
     // an injected IEnumerable of them is always empty: ask the provider
     // manager instead. Without it every probe ran the whole metadata
     // pipeline, remote lookups included.
-    private ICustomMetadataProvider<Video>? _probeProvider;
+    private volatile ICustomMetadataProvider<Video>? _probeProvider;
 
-    private ICustomMetadataProvider<Video>? GetProbeProvider(Video owner)
+    internal ICustomMetadataProvider<Video>? GetProbeProvider(Video owner)
     {
-        if (_probeProvider is not null)
-            return _probeProvider;
+        var cached = _probeProvider;
+        if (cached is not null)
+            return cached;
         try
         {
             var options = _libraryManager.GetLibraryOptions(owner);
             IEnumerable<IMetadataProvider> providers = owner is Episode
-                ? providerManager.Value.GetMetadataProviders<Episode>(owner, options, true)
-                : providerManager.Value.GetMetadataProviders<MediaBrowser.Controller.Entities.Movies.Movie>(owner, options, true);
-            _probeProvider = providers
+                ? providerManager.Value.GetMetadataProvidersDirect<Episode>(owner, options, true)
+                : providerManager.Value.GetMetadataProvidersDirect<MediaBrowser.Controller.Entities.Movies.Movie>(owner, options, true);
+            var resolved = providers
                 .OfType<ICustomMetadataProvider<Video>>()
                 .FirstOrDefault(p => p.Name == "Probe Provider");
+            if (resolved is not null)
+                _probeProvider = resolved;
+            return resolved;
         }
         catch (Exception ex)
         {
             _log.LogWarning(ex, "Could not resolve the probe provider");
+            return null;
         }
-        return _probeProvider;
     }
 
     // Item details only list the first sources unless the caller asks for

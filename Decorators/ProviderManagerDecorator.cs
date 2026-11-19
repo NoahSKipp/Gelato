@@ -266,6 +266,18 @@ public sealed class ProviderManagerDecorator(
         where T : BaseItem =>
         item.IsStream() ? [] : inner.GetMetadataProviders<T>(item, libraryOptions, includeDisabled);
 
+    /// <summary>
+    /// Bypasses the stream-row filter so MediaSourceManagerDecorator can resolve
+    /// Jellyfin's native ffprobe provider ("Probe Provider") when probing stream rows.
+    /// </summary>
+    public IEnumerable<IMetadataProvider<T>> GetMetadataProvidersDirect<T>(
+        BaseItem item,
+        LibraryOptions libraryOptions,
+        bool includeDisabled
+    )
+        where T : BaseItem =>
+        inner.GetMetadataProviders<T>(item, libraryOptions, includeDisabled);
+
     public IEnumerable<IMetadataSaver> GetMetadataSavers(
         BaseItem item,
         LibraryOptions libraryOptions
