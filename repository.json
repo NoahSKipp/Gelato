@@ -8,6 +8,14 @@
     "owner": "lstb1t",
     "versions": [
       {
+        "changelog": "## [0.26.32.2] - 2026-11-19\n\n### 🐛 Bug Fixes\n\n- *(playback)* Bypass stream-row filter when resolving native Probe Provider\n",
+        "checksum": "37ca73d0a86ab1ab7925fdbb369c892e",
+        "sourceUrl": "https://github.com/NoahSKipp/Gelato/releases/download/v0.26.32.2/gelato_0.26.32.2.zip",
+        "targetAbi": "12.0.0.0",
+        "timestamp": "2026-11-19T22:49:14Z",
+        "version": "0.26.32.2"
+      },
+      {
         "changelog": "## [0.26.32.1] - 2026-11-19\n\n### 🐛 Bug Fixes\n\n- *(artwork)* Exclude stream rows from artwork/metadata pipelines and add stream artwork cleanup tasks\n\n### ⚡ Performance\n\n- *(streams)* Share existing stream rows across users with matching setup and persist joins across restarts\n",
         "checksum": "a891547f8c68fea1d34aee1ef2dd7f76",
         "sourceUrl": "https://github.com/NoahSKipp/Gelato/releases/download/v0.26.32.1/gelato_0.26.32.1.zip",
@@ -238,14 +246,6 @@
         "targetAbi": "12.0.0.0",
         "timestamp": "2026-09-12T11:10:53Z",
         "version": "0.26.20.0"
-      },
-      {
-        "changelog": "## [0.26.19.1] - 2026-09-11\n\n### 🐛 Bug Fixes\n\n- Stop gating the playback stub on Jellyfin's internal action name\n\n### 📚 Documentation\n\n- Note two parked AIOStreams-side latency levers\n- Note a third parked AIOStreams lever - cacheAndPlay\n- Turn performance notes into an action guide\n",
-        "checksum": "bf8e95a5041a1c029c09c2db9e17bd1c",
-        "sourceUrl": "https://github.com/NoahSKipp/Gelato/releases/download/v0.26.19.1/gelato_0.26.19.1.zip",
-        "targetAbi": "12.0.0.0",
-        "timestamp": "2026-09-11T22:39:54Z",
-        "version": "0.26.19.1"
       }
     ]
   }
