@@ -49,6 +49,7 @@ public class ServiceRegistrator : IPluginServiceRegistrator
         services.AddSingleton<ProbeGate>();
         services.AddSingleton<BackgroundWriteGate>();
         services.AddSingleton<TmdbSearch>();
+        services.AddSingleton<IUserDataRows, EfUserDataRows>();
         services.DecorateSingle<IItemRepository, GelatoItemRepository>();
         services.AddSingleton(sp => (GelatoItemRepository)sp.GetRequiredService<IItemRepository>());
         services.AddSingleton<GelatoStremioProviderFactory>();
@@ -105,7 +106,8 @@ public class ServiceRegistrator : IPluginServiceRegistrator
             .DecorateSingle<IProviderManager, ProviderManagerDecorator>()
             .DecorateSingle<IImageProcessor, ImageProcessorDecorator>()
             .DecorateSingle<ITrickplayManager, TrickplayManagerDecorator>()
-            .DecorateSingle<IChapterManager, ChapterManagerDecorator>();
+            .DecorateSingle<IChapterManager, ChapterManagerDecorator>()
+            .DecorateSingle<IUserDataManager, UserDataManagerDecorator>();
         // Expose the concrete decorator as Lazy so ImageProcessorDecorator can call SaveImageDirect
         // without introducing a circular dependency at construction time.
         services.AddSingleton(sp => new Lazy<ProviderManagerDecorator>(
