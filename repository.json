@@ -8,6 +8,14 @@
     "owner": "lstb1t",
     "versions": [
       {
+        "changelog": "## [0.26.32.3] - 2026-11-23\n\n### 🐛 Bug Fixes\n\n- *(userdata)* Keep one watched state per stub item across provider id changes\n\n### 🧪 Testing\n\n- *(userdata)* Cover progress across provider id changes and split row convergence\n",
+        "checksum": "3e42bf3589d45547448a4e8a1fed20b7",
+        "sourceUrl": "https://github.com/NoahSKipp/Gelato/releases/download/v0.26.32.3/gelato_0.26.32.3.zip",
+        "targetAbi": "12.0.0.0",
+        "timestamp": "2026-11-23T12:22:11Z",
+        "version": "0.26.32.3"
+      },
+      {
         "changelog": "## [0.26.32.2] - 2026-11-19\n\n### 🐛 Bug Fixes\n\n- *(playback)* Bypass stream-row filter when resolving native Probe Provider\n",
         "checksum": "37ca73d0a86ab1ab7925fdbb369c892e",
         "sourceUrl": "https://github.com/NoahSKipp/Gelato/releases/download/v0.26.32.2/gelato_0.26.32.2.zip",
@@ -238,14 +246,6 @@
         "targetAbi": "12.0.0.0",
         "timestamp": "2026-09-12T18:57:36Z",
         "version": "0.26.20.1"
-      },
-      {
-        "changelog": "## [0.26.20.0] - 2026-09-12\n\n### 🚀 Features\n\n- Surface AIOStreams' cached flag to the player when PROVIDE_STREAM_DATA is on\n\n### 🐛 Bug Fixes\n\n- Exclude Gelato's own stream-duplicate items from Continue Watching\n",
-        "checksum": "d00ca34df3afbecbf365740da3ad9658",
-        "sourceUrl": "https://github.com/NoahSKipp/Gelato/releases/download/v0.26.20.0/gelato_0.26.20.0.zip",
-        "targetAbi": "12.0.0.0",
-        "timestamp": "2026-09-12T11:10:53Z",
-        "version": "0.26.20.0"
       }
     ]
   }
