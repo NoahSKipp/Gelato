@@ -8,6 +8,14 @@
     "owner": "lstb1t",
     "versions": [
       {
+        "changelog": "## [0.26.32.4] - 2026-11-25\n\n### 🐛 Bug Fixes\n\n- *(artwork)* Fill missing posters and reject image addresses ending in null\n- *(artwork)* Import the Services namespace for ArtUrl in the stremio provider\n\n### 🧪 Testing\n\n- *(artwork)* Import the entities namespace for image info\n",
+        "checksum": "f63bba784e6e08ce265322bb26d1e85a",
+        "sourceUrl": "https://github.com/NoahSKipp/Gelato/releases/download/v0.26.32.4/gelato_0.26.32.4.zip",
+        "targetAbi": "12.0.0.0",
+        "timestamp": "2026-11-25T18:55:04Z",
+        "version": "0.26.32.4"
+      },
+      {
         "changelog": "## [0.26.32.3] - 2026-11-23\n\n### 🐛 Bug Fixes\n\n- *(userdata)* Keep one watched state per stub item across provider id changes\n\n### 🧪 Testing\n\n- *(userdata)* Cover progress across provider id changes and split row convergence\n",
         "checksum": "3e42bf3589d45547448a4e8a1fed20b7",
         "sourceUrl": "https://github.com/NoahSKipp/Gelato/releases/download/v0.26.32.3/gelato_0.26.32.3.zip",
@@ -238,14 +246,6 @@
         "targetAbi": "12.0.0.0",
         "timestamp": "2026-09-12T21:28:05Z",
         "version": "0.26.20.2"
-      },
-      {
-        "changelog": "## [0.26.20.1] - 2026-09-12\n\n### ⚡ Performance\n\n- Prefetch English/German subtitle conversion alongside stream sync\n",
-        "checksum": "18c21a8ed96cb849370ccf73ecca181b",
-        "sourceUrl": "https://github.com/NoahSKipp/Gelato/releases/download/v0.26.20.1/gelato_0.26.20.1.zip",
-        "targetAbi": "12.0.0.0",
-        "timestamp": "2026-09-12T18:57:36Z",
-        "version": "0.26.20.1"
       }
     ]
   }
