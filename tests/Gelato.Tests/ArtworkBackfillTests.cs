@@ -2,6 +2,7 @@ using System.Reflection;
 using Gelato.Providers;
 using Gelato.ScheduledTasks;
 using Gelato.Services;
+using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.Movies;
 using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
