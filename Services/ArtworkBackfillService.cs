@@ -12,7 +12,7 @@ using Microsoft.Extensions.Logging;
 namespace Gelato.Services;
 
 /// <summary>
-/// Gives Gelato movies and series a backdrop and logo when they have none.
+/// Gives Gelato movies and series a backdrop, logo and poster when they have none.
 /// Catalog sync only stores the poster, so most stubs open with an empty
 /// header. Art comes from the addon's full meta first, then TMDB, and is
 /// downloaded so the first view is fast. Titles with nothing anywhere are
@@ -37,7 +37,7 @@ public sealed class ArtworkBackfillService(
         && item.IsGelato()
         && !item.IsStream()
         && !item.IsLocked
-        && !item.HasImage(ImageType.Backdrop)
+        && (!item.HasImage(ImageType.Backdrop) || !item.HasImage(ImageType.Primary))
         && !TriedRecently(item);
 
     private static bool TriedRecently(BaseItem item)
@@ -47,7 +47,7 @@ public sealed class ArtworkBackfillService(
             && DateTime.UtcNow - at < RetryAfter;
     }
 
-    /// <summary>The stubs still without a backdrop, oldest first, at most <paramref name="limit"/>.</summary>
+    /// <summary>The stubs still without a backdrop or poster, oldest first, at most <paramref name="limit"/>.</summary>
     public List<BaseItem> FindCandidates(int limit) =>
         libraryManager
             .GetItemList(
@@ -76,7 +76,7 @@ public sealed class ArtworkBackfillService(
         try
         {
             var stremio = GelatoPlugin.Instance?.Configuration.Stremio;
-            string? backdrop = null, logo = null, thumb = null;
+            string? backdrop = null, logo = null, thumb = null, poster = null;
             if (stremio is not null)
             {
                 try
@@ -85,13 +85,14 @@ public sealed class ArtworkBackfillService(
                     backdrop = meta?.Background;
                     logo = meta?.Logo;
                     thumb = meta?.LandscapePoster;
+                    poster = ArtUrl.Clean(meta?.Poster);
                 }
                 catch (Exception ex)
                 {
                     log.LogDebug(ex, "ArtworkBackfill: addon meta failed for {Name}", item.Name);
                 }
 
-                if (backdrop is null || logo is null)
+                if (backdrop is null || logo is null || (poster is null && !item.HasImage(ImageType.Primary)))
                 {
                     var tmdb = await stremio
                         .GetTmdbArtworkAsync(
@@ -104,11 +105,13 @@ public sealed class ArtworkBackfillService(
                         .ConfigureAwait(false);
                     backdrop ??= tmdb.Backdrop;
                     logo ??= tmdb.Logo;
+                    poster ??= tmdb.Poster;
                 }
             }
 
             var stored = false;
             stored |= await SaveIfMissing(item, ImageType.Backdrop, backdrop, cancellationToken).ConfigureAwait(false);
+            stored |= await SaveIfMissing(item, ImageType.Primary, poster, cancellationToken).ConfigureAwait(false);
             await SaveIfMissing(item, ImageType.Logo, logo, cancellationToken).ConfigureAwait(false);
             await SaveIfMissing(item, ImageType.Thumb, thumb, cancellationToken).ConfigureAwait(false);
 
@@ -134,7 +137,8 @@ public sealed class ArtworkBackfillService(
 
     private async Task<bool> SaveIfMissing(BaseItem item, ImageType type, string? url, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(url) || item.HasImage(type))
+        url = ArtUrl.Clean(url);
+        if (url is null || item.HasImage(type))
             return false;
         try
         {

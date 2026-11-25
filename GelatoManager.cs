@@ -2392,7 +2392,7 @@ public sealed class GelatoManager(
         item.Id = libraryManager.GetNewItemId(item.Path, item.GetType());
         item.PresentationUniqueKey = item.CreatePresentationUniqueKey();
 
-        var primaryImage = meta.Poster ?? meta.Thumbnail;
+        var primaryImage = ArtUrl.Clean(meta.Poster) ?? ArtUrl.Clean(meta.Thumbnail);
         if (!string.IsNullOrWhiteSpace(primaryImage))
             ProviderManagerDecorator.SetRemoteImage(
                 appPaths,
@@ -2418,8 +2418,9 @@ public sealed class GelatoManager(
 
     private void SetRemoteImageIfAny(BaseItem item, ImageType type, string? url)
     {
-        if (!string.IsNullOrWhiteSpace(url))
-            ProviderManagerDecorator.SetRemoteImage(appPaths, item, type, null, url);
+        var clean = ArtUrl.Clean(url);
+        if (clean is not null)
+            ProviderManagerDecorator.SetRemoteImage(appPaths, item, type, null, clean);
     }
 
     /// <summary>

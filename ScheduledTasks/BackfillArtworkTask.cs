@@ -5,7 +5,7 @@ using Microsoft.Extensions.Logging;
 namespace Gelato.ScheduledTasks;
 
 /// <summary>
-/// Fills in backdrops and logos for Gelato titles that have none, a few
+/// Fills in backdrops, logos and posters for Gelato titles that have none, a few
 /// hundred per run, one at a time with a pause between, so it never competes
 /// with the library scan or the series tree sync for the database.
 /// </summary>
@@ -19,7 +19,7 @@ public sealed class BackfillArtworkTask(ArtworkBackfillService backfill, ILogger
     public string Key => "GelatoBackfillArtwork";
 
     public string Description =>
-        "Gives Gelato movies and series without a backdrop one from their addon or TMDB, up to 500 per run. Titles with no art anywhere are retried after 30 days.";
+        "Gives Gelato movies and series without a backdrop or poster one from their addon or TMDB, up to 500 per run. Titles with no art anywhere are retried after 30 days.";
 
     public string Category => "Gelato";
 
@@ -57,7 +57,7 @@ public sealed class BackfillArtworkTask(ArtworkBackfillService backfill, ILogger
             progress.Report(100.0 * (i + 1) / items.Count);
             await Task.Delay(Pause, cancellationToken).ConfigureAwait(false);
         }
-        log.LogInformation("Backfill artwork: {Filled} of {Count} titles got a backdrop", filled, items.Count);
+        log.LogInformation("Backfill artwork: {Filled} of {Count} titles got art", filled, items.Count);
         progress.Report(100);
     }
 }

@@ -28,6 +28,27 @@ public class ArtworkBackfillTests
     }
 
     [Fact]
+    public void NeedsArtReturnsTrueForSeriesWithBackdropButNoPoster()
+    {
+        var series = new Series { Id = Guid.NewGuid(), Name = "Invincible" };
+        series.SetProviderId("Stremio", "tt6741278");
+        series.SetImage(new ItemImageInfo { Path = "https://image.tmdb.org/t/p/original/b.jpg", Type = ImageType.Backdrop }, 0);
+
+        Assert.True(ArtworkBackfillService.NeedsArt(series));
+    }
+
+    [Fact]
+    public void NeedsArtReturnsFalseWhenPosterAndBackdropExist()
+    {
+        var series = new Series { Id = Guid.NewGuid(), Name = "Invincible" };
+        series.SetProviderId("Stremio", "tt6741278");
+        series.SetImage(new ItemImageInfo { Path = "https://image.tmdb.org/t/p/original/b.jpg", Type = ImageType.Backdrop }, 0);
+        series.SetImage(new ItemImageInfo { Path = "https://image.tmdb.org/t/p/w500/p.jpg", Type = ImageType.Primary }, 0);
+
+        Assert.False(ArtworkBackfillService.NeedsArt(series));
+    }
+
+    [Fact]
     public void NeedsArtReturnsFalseForStreamTaggedMovie()
     {
         var stream = new Movie

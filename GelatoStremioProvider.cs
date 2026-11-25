@@ -354,7 +354,7 @@ public class GelatoStremioProvider(
     /// Backdrops without text come first, then the preferred language, then
     /// English; logos the preferred language, then English, then any.
     /// </summary>
-    public async Task<(string? Backdrop, string? Logo)> GetTmdbArtworkAsync(
+    public async Task<(string? Backdrop, string? Logo, string? Poster)> GetTmdbArtworkAsync(
         string? tmdbId,
         string? imdbId,
         bool isMovie,
@@ -384,7 +384,7 @@ public class GelatoStremioProvider(
                 );
             }
             if (string.IsNullOrWhiteSpace(tmdbId))
-                return (null, null);
+                return (null, null, null);
 
             var lang = string.IsNullOrWhiteSpace(language) ? "en" : language.Split('-')[0].ToLowerInvariant();
             var images = JsonSerializer.Deserialize<TmdbImagesResponse>(
@@ -413,13 +413,22 @@ public class GelatoStremioProvider(
                 .ThenByDescending(l => l.VoteAverage)
                 .FirstOrDefault()
                 ?.FilePath;
+            var poster = images
+                ?.Posters?.OrderBy(p => Rank(p.Iso639, lang, "en", null))
+                .ThenByDescending(p => p.VoteAverage)
+                .FirstOrDefault()
+                ?.FilePath;
             const string Base = "https://image.tmdb.org/t/p/original";
-            return (backdrop is null ? null : Base + backdrop, logo is null ? null : Base + logo);
+            return (
+                backdrop is null ? null : ArtUrl.Clean(Base + backdrop),
+                logo is null ? null : ArtUrl.Clean(Base + logo),
+                poster is null ? null : ArtUrl.Clean("https://image.tmdb.org/t/p/w500" + poster)
+            );
         }
         catch (Exception ex)
         {
             log.LogDebug(ex, "GetTmdbArtwork: lookup failed for tmdb:{TmdbId} imdb:{ImdbId}", tmdbId, imdbId);
-            return (null, null);
+            return (null, null, null);
         }
     }
 
@@ -1013,6 +1022,7 @@ public class TmdbImagesResponse
 {
     public List<TmdbImage>? Backdrops { get; set; }
     public List<TmdbImage>? Logos { get; set; }
+    public List<TmdbImage>? Posters { get; set; }
 }
 
 public class TmdbImage
